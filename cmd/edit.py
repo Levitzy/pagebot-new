@@ -1,75 +1,69 @@
 def execute(sender_id, args, context):
     logger = context.get("logger")
-    send_message_func = context.get(
-        "send_message"
-    )  # This is enhanced_send_message from server.py
+    send_message_func = context.get("send_message")
     edit_bot_message_func = context.get("edit_bot_message")
-    get_last_bot_details_func = context.get("get_last_bot_message_details")
+    replied_to_message_id = context.get("replied_to_message_id")
+    prefix = context.get("prefix", "!")
 
-    if not all(
-        [logger, send_message_func, edit_bot_message_func, get_last_bot_details_func]
-    ):
+    if not logger or not send_message_func or not edit_bot_message_func:
         if logger:
-            logger.error("Edit command missing necessary context functions.")
-        # Avoid sending message if send_message_func itself is missing
+            logger.error(
+                "Edit command missing critical context functions (logger, send_message, or edit_bot_message)."
+            )
         if send_message_func and callable(send_message_func):
             send_message_func(
-                sender_id, "Error: Edit command could not be initialized properly."
+                sender_id,
+                "Error: Edit command could not be initialized properly. Please contact support.",
+            )
+        else:
+            # If send_message_func is also missing, log to console if possible
+            print(
+                f"ERROR: Edit command for {sender_id} cannot initialize and cannot send message."
             )
         return
 
     if not args:
         send_message_func(
-            sender_id, f"Usage: {context.get('prefix', '!')}edit <new message text>"
+            sender_id,
+            f"To edit my last message, please reply to it and use the command: {prefix}edit <your new message text>",
         )
-        logger.info(f"Edit command called by {sender_id} without new text.")
+        logger.info(
+            f"Edit command called by {sender_id} without new text or not as a reply."
+        )
+        return
+
+    if not replied_to_message_id:
+        send_message_func(
+            sender_id,
+            f"Please reply to the message you want to edit, then use the command: {prefix}edit <your new message text>",
+        )
+        logger.info(
+            f"Edit command by {sender_id} was not a reply to a specific message."
+        )
         return
 
     new_text = " ".join(args)
-    last_bot_mid, last_bot_recipient_id = get_last_bot_details_func()
+    message_id_to_target_for_edit = replied_to_message_id
 
-    if (
-        last_bot_mid and last_bot_recipient_id == sender_id
-    ):  # Ensure we're "editing" a message sent to this user
+    logger.info(
+        f"User {sender_id} attempting to 'edit' (via reply) message ID: {message_id_to_target_for_edit} with new text: '{new_text}'"
+    )
+
+    edit_response = edit_bot_message_func(
+        message_id_to_target_for_edit, new_text, sender_id
+    )
+
+    if edit_response and edit_response.get("message_id"):
         logger.info(
-            f"User {sender_id} attempting to 'edit' bot's last message (ID: {last_bot_mid}) with text: '{new_text}'"
+            f"Bot's message 'edited' (new message sent in response to edit command) for user {sender_id}. New MID: {edit_response.get('message_id')}"
         )
-
-        # Initialize editMessage config if not already done (this is a bit of a workaround for module-level config)
-        # A better approach is dependency injection or ensuring config is loaded before this module.
-        # For now, assuming server.py calls init_edit_message_config.
-        # If functions.editMessage.PAGE_ACCESS_TOKEN is None: # Check if config needs to be passed
-        #    from functions import editMessage # Re-import to access module directly
-        #    editMessage.init_edit_message_config(context.get('config'))
-
-        edit_response = edit_bot_message_func(last_bot_mid, new_text, sender_id)
-
-        if edit_response and edit_response.get("message_id"):
-            # The enhanced_send_message (aliased as send_message_func here if edit_bot_message_func uses it)
-            # would have already updated the last_bot_message_id_store with the new message ID.
-            logger.info(
-                f"Bot's message 'edited' (new message sent) for user {sender_id}. New MID: {edit_response.get('message_id')}"
-            )
-            # No need to send another confirmation if edit_bot_message_func already implies it or if it's clear.
-            # send_message_func(sender_id, f"Previous message has been updated with new content.")
-        else:
-            logger.warning(
-                f"Failed to 'edit' (send new message for) bot's last message for user {sender_id}."
-            )
-            send_message_func(sender_id, "Could not update the previous message.")
-
-    elif last_bot_mid and last_bot_recipient_id != sender_id:
-        logger.warning(
-            f"User {sender_id} tried to edit last bot message, but it was sent to a different recipient ({last_bot_recipient_id})."
-        )
-        send_message_func(
-            sender_id,
-            "Cannot edit the last message as it wasn't sent to you in this context.",
-        )
+        # The enhanced_send_message in server.py, if used by edit_bot_message_func,
+        # would update the last_bot_message_id_store.
+        # No explicit confirmation message here as edit_bot_message_func sends the "edited" content.
     else:
-        logger.info(
-            f"Edit command called by user {sender_id}, but no recent bot message to this user was found to 'edit'."
+        logger.warning(
+            f"Failed to 'edit' (send new message for) bot's message (ID: {message_id_to_target_for_edit}) for user {sender_id}."
         )
         send_message_func(
-            sender_id, "There's no recent message from me to you to edit."
+            sender_id, "Could not update the replied-to message. Please try again."
         )
