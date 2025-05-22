@@ -16,7 +16,6 @@ def execute(sender_id, args, context):
                 "Error: Edit command could not be initialized properly. Please contact support.",
             )
         else:
-            # If send_message_func is also missing, log to console if possible
             print(
                 f"ERROR: Edit command for {sender_id} cannot initialize and cannot send message."
             )
@@ -57,9 +56,6 @@ def execute(sender_id, args, context):
         logger.info(
             f"Bot's message 'edited' (new message sent in response to edit command) for user {sender_id}. New MID: {edit_response.get('message_id')}"
         )
-        # The enhanced_send_message in server.py, if used by edit_bot_message_func,
-        # would update the last_bot_message_id_store.
-        # No explicit confirmation message here as edit_bot_message_func sends the "edited" content.
     else:
         logger.warning(
             f"Failed to 'edit' (send new message for) bot's message (ID: {message_id_to_target_for_edit}) for user {sender_id}."
