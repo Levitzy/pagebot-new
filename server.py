@@ -3,7 +3,9 @@ import json
 import os
 import importlib.util
 import logging
-from functions.sendMessage import send_message
+from functions.sendMessage import (
+    send_message as original_send_message,
+)  # Renamed to avoid conflict
 from functions.sendTyping import send_typing_indicator
 from functions.deleteMessage import delete_message
 
@@ -17,14 +19,14 @@ except FileNotFoundError:
     logging.error(
         "CRITICAL: config.json not found. Please ensure it exists in the same directory as server.py."
     )
-    config = {}  # Provide a default empty config to prevent further startup errors
+    config = {}
 except json.JSONDecodeError:
     logging.error("CRITICAL: config.json is not valid JSON. Please check its syntax.")
     config = {}
 
 PAGE_ACCESS_TOKEN = config.get("page_access_token")
 VERIFY_TOKEN = config.get("verify_token")
-PREFIX = config.get("prefix", "!")  # Default prefix if not in config
+PREFIX = config.get("prefix", "!")
 
 if not PAGE_ACCESS_TOKEN:
     logging.warning(
@@ -35,12 +37,27 @@ if not VERIFY_TOKEN:
         "Verify Token is missing from config.json or config.json is missing/invalid."
     )
 
-
 # --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# --- State for last bot message ID ---
+last_bot_message_id_store = {"id": None}
+
+
+# --- Enhanced Send Message Function ---
+def enhanced_send_message(recipient_id, message_text):
+    response_data = original_send_message(recipient_id, message_text)
+    if response_data and response_data.get("message_id"):
+        last_bot_message_id_store["id"] = response_data.get("message_id")
+        logger.info(f"Stored last bot message ID: {last_bot_message_id_store['id']}")
+    elif response_data:
+        logger.warning(
+            f"send_message response did not contain a message_id: {response_data}"
+        )
+    return response_data
 
 
 # --- Command Module Loading ---
@@ -119,10 +136,11 @@ def webhook_handler():
                 if "message" in messaging_event:
                     message_data = messaging_event["message"]
                     message_text = message_data.get("text")
-                    original_message_id = message_data.get("mid")
+                    original_message_id = message_data.get(
+                        "mid"
+                    )  # This is the user's message ID
 
                     if message_text:
-                        # Ensure process_message is defined or imported
                         process_message(sender_id, message_text, original_message_id)
                     else:
                         logger.info(
@@ -132,7 +150,6 @@ def webhook_handler():
                     logger.info(
                         f"Received postback event from {sender_id}: {messaging_event.get('postback')}"
                     )
-                    # Handle postbacks if needed
                 elif "delivery" in messaging_event:
                     logger.debug(
                         f"Received delivery confirmation: {messaging_event.get('delivery')}"
@@ -150,16 +167,14 @@ def webhook_handler():
 
 
 # --- Message Processing Logic ---
-def process_message(sender_id, message_text, original_message_id):
+def process_message(sender_id, message_text, original_message_id_from_user):
     if not PAGE_ACCESS_TOKEN:
         logger.error("Cannot process message: PAGE_ACCESS_TOKEN is not configured.")
         return
 
-    send_typing_indicator(
-        sender_id, True
-    )  # Make sure this function handles potential errors
+    send_typing_indicator(sender_id, True)
     logger.info(
-        f"Processing message from {sender_id}: '{message_text}' (ID: {original_message_id})"
+        f"Processing message from {sender_id}: '{message_text}' (User's MID: {original_message_id_from_user})"
     )
 
     parts = message_text.split()
@@ -186,10 +201,13 @@ def process_message(sender_id, message_text, original_message_id):
             actual_command_name = command_candidate
 
     context = {
-        "send_message": send_message,
+        "send_message": enhanced_send_message,  # Use the enhanced sender
         "send_typing": send_typing_indicator,
         "delete_message": delete_message,
-        "original_message_id": original_message_id,
+        "original_user_message_id": original_message_id_from_user,  # User's incoming message ID
+        "get_last_bot_message_id": lambda: last_bot_message_id_store[
+            "id"
+        ],  # Function to get the ID
         "prefix": PREFIX,
         "logger": logger,
         "config": config,
@@ -209,7 +227,7 @@ def process_message(sender_id, message_text, original_message_id):
                 exc_info=True,
             )
             try:
-                send_message(
+                enhanced_send_message(
                     sender_id,
                     f"An error occurred while executing the command '{actual_command_name}'.",
                 )
@@ -221,22 +239,16 @@ def process_message(sender_id, message_text, original_message_id):
         logger.info(
             f"Unknown prefixed command '{command_candidate}' from user {sender_id}."
         )
-        send_message(sender_id, f"Unknown command: {command_candidate}")
+        enhanced_send_message(sender_id, f"Unknown command: {command_candidate}")
     else:
         logger.info(
             f"No command matched for message from {sender_id}: '{message_text}'. Sending default reply."
         )
-        send_message(sender_id, f"You said: {message_text}")
-
-    # It's generally good practice to turn typing off after processing,
-    # though sending a message often does this implicitly.
-    # send_typing_indicator(sender_id, False) # Uncomment if needed
+        enhanced_send_message(sender_id, f"You said: {message_text}")
 
 
 # --- Main Application Runner ---
 if __name__ == "__main__":
-    port = int(
-        os.environ.get("PORT", 5000)
-    )  # Render typically sets the PORT environment variable
+    port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)  # debug=False for production
+    app.run(host="0.0.0.0", port=port, debug=True)

@@ -20,11 +20,16 @@ def send_message(recipient_id, message_text):
 
     try:
         response = requests.post(url, params=params, headers=headers, json=data)
+        response_data = response.json()
         if response.status_code != 200:
             logger.error(
                 f"Failed to send message: {response.status_code} {response.text}"
             )
-        return response.json()
+            return None
+        logger.info(
+            f"Message sent successfully to {recipient_id}. Response: {response_data}"
+        )
+        return response_data  # Return the full response which includes message_id
     except Exception as e:
         logger.error(f"Error sending message: {str(e)}")
         return None
