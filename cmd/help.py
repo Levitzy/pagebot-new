@@ -1,20 +1,18 @@
 import os
 
 
-def execute(sender_id, args, send_message_func):
-    cmd_dir = os.path.dirname(__file__)
-    commands = []
+def execute(sender_id, args, context):
+    send_message_func = context["send_message"]
+    prefix = context["prefix"]
 
-    for filename in os.listdir(cmd_dir):
-        if filename.endswith(".py") and filename != "__init__.py":
-            command_name = filename[:-3]
-            commands.append(command_name)
+    available_commands = sorted(context.get("cmd_module_keys", []))
 
-    if not commands:
+    if not available_commands:
         message = "No commands are available."
     else:
         message = "Available commands:\n"
-        for cmd in sorted(commands):
-            message += f"!{cmd}\n"
+        message += f"You can use commands with the prefix '{prefix}' (e.g., {prefix}help) or without a prefix (e.g., help).\n\n"
+        for cmd_name in available_commands:
+            message += f"- {cmd_name}\n"
 
     send_message_func(sender_id, message)
