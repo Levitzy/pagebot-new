@@ -3,52 +3,50 @@ import json
 import os
 import importlib.util
 import logging
-from functions.sendMessage import (
-    send_message as original_send_message,
-)  # Renamed to avoid conflict
+from functions.sendMessage import send_message as original_send_message
 from functions.sendTyping import send_typing_indicator
 from functions.deleteMessage import delete_message
 
 app = Flask(__name__)
 
-# --- Configuration Loading ---
 try:
     with open("config.json", "r") as f:
         config = json.load(f)
 except FileNotFoundError:
-    logging.error(
-        "CRITICAL: config.json not found. Please ensure it exists in the same directory as server.py."
-    )
+    logging.critical("CRITICAL: config.json not found. Bot cannot start without it.")
     config = {}
 except json.JSONDecodeError:
-    logging.error("CRITICAL: config.json is not valid JSON. Please check its syntax.")
+    logging.critical(
+        "CRITICAL: config.json is not valid JSON. Please check its syntax."
+    )
     config = {}
 
 PAGE_ACCESS_TOKEN = config.get("page_access_token")
 VERIFY_TOKEN = config.get("verify_token")
 PREFIX = config.get("prefix", "!")
 
-if not PAGE_ACCESS_TOKEN:
-    logging.warning(
-        "Page Access Token is missing from config.json or config.json is missing/invalid."
-    )
-if not VERIFY_TOKEN:
-    logging.warning(
-        "Verify Token is missing from config.json or config.json is missing/invalid."
-    )
-
-# --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# --- State for last bot message ID ---
+if not PAGE_ACCESS_TOKEN:
+    logger.critical(
+        "CRITICAL: Page Access Token is missing from config.json. The bot will not be able to interact with Facebook API."
+    )
+if not VERIFY_TOKEN:
+    logger.warning(
+        "Warning: Verify Token is missing from config.json. Webhook verification might fail."
+    )
+
+
 last_bot_message_id_store = {"id": None}
 
 
-# --- Enhanced Send Message Function ---
 def enhanced_send_message(recipient_id, message_text):
+    if not PAGE_ACCESS_TOKEN:
+        logger.error("Cannot send message: PAGE_ACCESS_TOKEN is not configured.")
+        return None
     response_data = original_send_message(recipient_id, message_text)
     if response_data and response_data.get("message_id"):
         last_bot_message_id_store["id"] = response_data.get("message_id")
@@ -60,7 +58,6 @@ def enhanced_send_message(recipient_id, message_text):
     return response_data
 
 
-# --- Command Module Loading ---
 cmd_modules = {}
 cmd_dir = os.path.join(os.path.dirname(__file__), "cmd")
 if os.path.isdir(cmd_dir):
@@ -89,7 +86,6 @@ else:
     )
 
 
-# --- Webhook Verification Route ---
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     logger.info("Received GET request on /webhook for verification.")
@@ -117,12 +113,11 @@ def verify_webhook():
         return "Verification Failed: Missing parameters.", 400
 
 
-# --- Webhook Message Handling Route ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
     logger.info(
-        f"Received POST request on /webhook with data: {json.dumps(data, indent=2)}"
+        f"Received POST request on /webhook with data: {json.dumps(data, indent=1)}"
     )
 
     if data and data.get("object") == "page":
@@ -136,15 +131,21 @@ def webhook_handler():
                 if "message" in messaging_event:
                     message_data = messaging_event["message"]
                     message_text = message_data.get("text")
-                    original_message_id = message_data.get(
-                        "mid"
-                    )  # This is the user's message ID
+                    original_message_id_from_user = message_data.get("mid")
 
                     if message_text:
-                        process_message(sender_id, message_text, original_message_id)
+                        if PAGE_ACCESS_TOKEN:
+                            send_typing_indicator(sender_id, True)
+                        try:
+                            process_message(
+                                sender_id, message_text, original_message_id_from_user
+                            )
+                        finally:
+                            if PAGE_ACCESS_TOKEN:
+                                send_typing_indicator(sender_id, False)
                     else:
                         logger.info(
-                            f"Received message event from {sender_id} without text content (e.g., attachment). MID: {original_message_id}"
+                            f"Received message event from {sender_id} without text content. MID: {original_message_id_from_user}"
                         )
                 elif "postback" in messaging_event:
                     logger.info(
@@ -166,13 +167,11 @@ def webhook_handler():
     return "EVENT_RECEIVED", 200
 
 
-# --- Message Processing Logic ---
 def process_message(sender_id, message_text, original_message_id_from_user):
     if not PAGE_ACCESS_TOKEN:
         logger.error("Cannot process message: PAGE_ACCESS_TOKEN is not configured.")
         return
 
-    send_typing_indicator(sender_id, True)
     logger.info(
         f"Processing message from {sender_id}: '{message_text}' (User's MID: {original_message_id_from_user})"
     )
@@ -180,7 +179,6 @@ def process_message(sender_id, message_text, original_message_id_from_user):
     parts = message_text.split()
     if not parts:
         logger.warning(f"Received empty message text from {sender_id}.")
-        send_typing_indicator(sender_id, False)
         return
 
     first_word = parts[0]
@@ -201,54 +199,55 @@ def process_message(sender_id, message_text, original_message_id_from_user):
             actual_command_name = command_candidate
 
     context = {
-        "send_message": enhanced_send_message,  # Use the enhanced sender
+        "send_message": enhanced_send_message,
         "send_typing": send_typing_indicator,
         "delete_message": delete_message,
-        "original_user_message_id": original_message_id_from_user,  # User's incoming message ID
-        "get_last_bot_message_id": lambda: last_bot_message_id_store[
-            "id"
-        ],  # Function to get the ID
+        "original_user_message_id": original_message_id_from_user,
+        "get_last_bot_message_id": lambda: last_bot_message_id_store["id"],
         "prefix": PREFIX,
         "logger": logger,
         "config": config,
         "cmd_module_keys": list(cmd_modules.keys()),
     }
 
-    if actual_command_name:
-        command_module = cmd_modules[actual_command_name]
-        try:
+    try:
+        if actual_command_name:
+            command_module = cmd_modules[actual_command_name]
             logger.info(
                 f"Executing command '{actual_command_name}' for user {sender_id} with args: {args}"
             )
             command_module.execute(sender_id, args, context)
-        except Exception as e:
-            logger.error(
-                f"Error executing command {actual_command_name} for user {sender_id}: {str(e)}",
-                exc_info=True,
+        elif is_prefixed_command:
+            logger.info(
+                f"Unknown prefixed command '{command_candidate}' from user {sender_id}."
             )
-            try:
-                enhanced_send_message(
-                    sender_id,
-                    f"An error occurred while executing the command '{actual_command_name}'.",
-                )
-            except Exception as send_err:
-                logger.error(
-                    f"Failed to send error message to user {sender_id}: {str(send_err)}"
-                )
-    elif is_prefixed_command:
-        logger.info(
-            f"Unknown prefixed command '{command_candidate}' from user {sender_id}."
+            enhanced_send_message(sender_id, f"Unknown command: {command_candidate}")
+        else:
+            logger.info(
+                f"No command matched for message from {sender_id}: '{message_text}'. Sending default reply."
+            )
+            enhanced_send_message(sender_id, f"You said: {message_text}")
+    except Exception as e:
+        logger.error(
+            f"Error during command processing or sending default reply for user {sender_id}: {str(e)}",
+            exc_info=True,
         )
-        enhanced_send_message(sender_id, f"Unknown command: {command_candidate}")
-    else:
-        logger.info(
-            f"No command matched for message from {sender_id}: '{message_text}'. Sending default reply."
-        )
-        enhanced_send_message(sender_id, f"You said: {message_text}")
+        try:
+            enhanced_send_message(
+                sender_id, f"An error occurred while processing your request."
+            )
+        except Exception as send_err:
+            logger.error(
+                f"Failed to send error message to user {sender_id}: {str(send_err)}"
+            )
 
 
-# --- Main Application Runner ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    if not PAGE_ACCESS_TOKEN or not VERIFY_TOKEN:
+        logger.critical(
+            "FATAL: Bot cannot start due to missing PAGE_ACCESS_TOKEN or VERIFY_TOKEN in config.json."
+        )
+    else:
+        app.run(host="0.0.0.0", port=port, debug=True)
