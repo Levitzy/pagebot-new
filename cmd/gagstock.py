@@ -316,9 +316,21 @@ def fetch_all_data(sender_id, send_message_func):
 
                     message = "⭐ Your favorite items are in stock!\n\n"
 
+                    category_restocks = {
+                        "gear": restocks["gear"],
+                        "seed": restocks["seed"],
+                        "egg": restocks["egg"],
+                        "honey": restocks["honey"],
+                        "cosmetics": restocks["cosmetics"],
+                    }
+
                     for item in favorites_in_stock:
                         emoji_part = f"{item['emoji']} " if item["emoji"] else ""
-                        message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])} ({item['category']})\n"
+                        restock_time = category_restocks.get(
+                            item["category"], "Unknown"
+                        )
+                        message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}\n"
+                        message += f"   📦 Category: {item['category'].title()} | ⏳ Restock in: {restock_time}\n\n"
 
                     weather_icon = weather_data.get("icon", "🌦️")
                     weather_current = weather_data.get("currentWeather", "Unknown")
@@ -331,7 +343,7 @@ def fetch_all_data(sender_id, send_message_func):
                     weather_rarity = weather_data.get("rarity", "Unknown")
 
                     weather_details = (
-                        f"\n🌤️ Weather: {weather_icon} {weather_current}\n"
+                        f"🌤️ Weather: {weather_icon} {weather_current}\n"
                         f"📖 Description: {weather_description}\n"
                         f"📌 Effect: {weather_effect}\n"
                         f"🪄 Crop Bonus: {weather_bonus}\n"
@@ -427,8 +439,9 @@ def execute(sender_id, args, context):
             sender_id,
             "📌 **Gagstock Commands:**\n"
             "• `gagstock on` - Track all stock changes\n"
-            "• `gagstock favorites` - Track only favorite items\n"
-            "• `gagstock off` - Stop tracking\n"
+            "• `gagstock off` - Stop all stock tracking\n"
+            "• `gagstock favorites on` - Track only favorite items\n"
+            "• `gagstock favorites off` - Stop favorites tracking\n"
             "• `gagstock favorite add [item_name]` - Add favorite item\n"
             "• `gagstock favorite remove [item_name]` - Remove favorite\n"
             "• `gagstock favorite list` - Show your favorites\n"
@@ -441,8 +454,15 @@ def execute(sender_id, args, context):
 
     if action == "off":
         if sender_id in active_sessions:
+            session_type = (
+                "favorites"
+                if active_sessions[sender_id].get("favorites_only", False)
+                else "all stocks"
+            )
             cleanup_session(sender_id)
-            send_message_func(sender_id, "🛑 Gagstock tracking stopped.")
+            send_message_func(
+                sender_id, f"🛑 Gagstock tracking stopped ({session_type})."
+            )
         else:
             send_message_func(sender_id, "⚠️ You don't have an active gagstock session.")
         return
@@ -557,43 +577,87 @@ def execute(sender_id, args, context):
         return
 
     elif action == "favorites":
-        if sender_id not in user_favorites or not user_favorites[sender_id]:
+        if len(args) < 2:
             send_message_func(
                 sender_id,
-                "⚠️ You need to add some favorites first!\n"
-                "Use `gagstock favorite add [item_name]` to add items to your favorites.",
+                "📌 **Favorites Tracking Commands:**\n"
+                "• `gagstock favorites on` - Start tracking only favorite items\n"
+                "• `gagstock favorites off` - Stop favorites tracking\n"
+                "• `gagstock favorite add [item_name]` - Add to favorites\n"
+                "• `gagstock favorite remove [item_name]` - Remove from favorites\n"
+                "• `gagstock favorite list` - Show your favorites\n"
+                "• `gagstock favorite clear` - Clear all favorites",
             )
             return
 
-        if sender_id in active_sessions:
+        fav_action = args[1].lower()
+
+        if fav_action == "on":
+            if sender_id not in user_favorites or not user_favorites[sender_id]:
+                send_message_func(
+                    sender_id,
+                    "⚠️ You need to add some favorites first!\n"
+                    "Use `gagstock favorite add [item_name]` to add items to your favorites.",
+                )
+                return
+
+            if sender_id in active_sessions:
+                current_mode = (
+                    "favorites"
+                    if active_sessions[sender_id].get("favorites_only", False)
+                    else "all stocks"
+                )
+                send_message_func(
+                    sender_id,
+                    f"📡 You're already tracking ({current_mode}). Use `gagstock off` or `gagstock favorites off` to stop first.",
+                )
+                return
+
             send_message_func(
                 sender_id,
-                "📡 You're already tracking. Use `gagstock off` to stop first.",
+                f"⭐ Favorites tracking started! You'll be notified when your favorite items are in stock.\n"
+                f"Current favorites: {', '.join(user_favorites[sender_id])}",
             )
+
+            active_sessions[sender_id] = {
+                "timer": None,
+                "last_combined_key": None,
+                "last_message": "",
+                "favorites_only": True,
+            }
+
+            logger.info(f"Started favorites-only gagstock session for {sender_id}")
+            fetch_all_data(sender_id, send_message_func)
             return
 
-        send_message_func(
-            sender_id,
-            f"⭐ Favorites tracking started! You'll be notified when your favorite items are in stock.\n"
-            f"Current favorites: {', '.join(user_favorites[sender_id])}",
-        )
+        elif fav_action == "off":
+            if sender_id in active_sessions and active_sessions[sender_id].get(
+                "favorites_only", False
+            ):
+                cleanup_session(sender_id)
+                send_message_func(sender_id, "🛑 Favorites tracking stopped.")
+            else:
+                send_message_func(
+                    sender_id, "⚠️ You don't have an active favorites tracking session."
+                )
+            return
 
-        active_sessions[sender_id] = {
-            "timer": None,
-            "last_combined_key": None,
-            "last_message": "",
-            "favorites_only": True,
-        }
-
-        logger.info(f"Started favorites-only gagstock session for {sender_id}")
-        fetch_all_data(sender_id, send_message_func)
+        else:
+            send_message_func(
+                sender_id, "❌ Unknown favorites command. Use `on` or `off`."
+            )
         return
 
     elif action == "on":
         if sender_id in active_sessions:
+            current_mode = (
+                "favorites"
+                if active_sessions[sender_id].get("favorites_only", False)
+                else "all stocks"
+            )
             send_message_func(
                 sender_id,
-                "📡 You're already tracking Gagstock. Use `gagstock off` to stop.",
+                f"📡 You're already tracking ({current_mode}). Use `gagstock off` or `gagstock favorites off` to stop first.",
             )
             return
 
@@ -616,5 +680,5 @@ def execute(sender_id, args, context):
     else:
         send_message_func(
             sender_id,
-            "❌ Unknown command. Use `gagstock` without arguments to see available commands.",
+            "❌ Unknown command. Use `gagstock` without arguments to see all available commands.",
         )
