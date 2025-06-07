@@ -9,9 +9,22 @@ with open("config.json", "r") as f:
 
 PAGE_ACCESS_TOKEN = config["page_access_token"]
 GRAPH_API_VERSION = config["graph_api_version"]
+PAGE_ID = config.get("page_id", "612984285242194")
 
 
 def send_typing_indicator(recipient_id, typing_on=True):
+    if not recipient_id or not PAGE_ACCESS_TOKEN:
+        logger.warning(
+            "send_typing_indicator: Missing recipient_id or PAGE_ACCESS_TOKEN"
+        )
+        return None
+
+    if str(recipient_id) == str(PAGE_ID):
+        logger.debug(
+            f"Skipping typing indicator for page ID {recipient_id} (echo message)"
+        )
+        return None
+
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
