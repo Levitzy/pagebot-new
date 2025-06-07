@@ -8,8 +8,6 @@ FUNCTIONS_AVAILABLE = True
 original_send_message = None
 send_typing_indicator = None
 edit_bot_message = None
-unsend_message = None
-schedule_unsend = None
 config_data = {}
 
 try:
@@ -39,18 +37,6 @@ try:
     )
 
     edit_bot_message = edit_bot_message_imported
-
-    from functions.unsendMessage import (
-        unsend_message as unsend_message_imported,
-        schedule_unsend as schedule_unsend_imported,
-        unsend_last_bot_message,
-        cancel_scheduled_unsend,
-        get_scheduled_unsends,
-    )
-
-    unsend_message = unsend_message_imported
-    schedule_unsend = schedule_unsend_imported
-
     if config_data:
         init_edit_message_config(config_data)
     else:
@@ -81,18 +67,6 @@ except ImportError as e:
             logging.error("editMessage function not available due to import error.")
             return None
 
-    if not unsend_message:
-
-        def unsend_message(message_id):
-            logging.error("unsendMessage function not available due to import error.")
-            return None
-
-    if not schedule_unsend:
-
-        def schedule_unsend(message_id, delay_seconds):
-            logging.error("scheduleUnsend function not available due to import error.")
-            return False
-
 
 app = Flask(__name__)
 
@@ -107,7 +81,7 @@ logger = logging.getLogger(__name__)
 
 if not FUNCTIONS_AVAILABLE:
     logger.critical(
-        "One or more critical function modules (sendMessage, sendTyping, editMessage, unsendMessage) are missing or failed to import. Bot will not operate correctly."
+        "One or more critical function modules (sendMessage, sendTyping, editMessage) are missing or failed to import. Bot will not operate correctly."
     )
 if not PAGE_ACCESS_TOKEN:
     logger.critical(
@@ -300,11 +274,6 @@ def process_message(
     context = {
         "send_message": enhanced_send_message,
         "edit_bot_message": edit_bot_message,
-        "unsend_message": unsend_message,
-        "schedule_unsend": schedule_unsend,
-        "unsend_last_bot_message": unsend_last_bot_message,
-        "cancel_scheduled_unsend": cancel_scheduled_unsend,
-        "get_scheduled_unsends": get_scheduled_unsends,
         "original_user_message_id": original_message_id_from_user,
         "replied_to_message_id": replied_to_message_id,
         "get_last_bot_message_details": lambda: (
