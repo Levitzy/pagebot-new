@@ -1,0 +1,84 @@
+# Privacy Policy
+
+**Effective Date:** 06-07-2025  
+
+## 1. Information We Collect
+
+### 1.1 Information You Provide
+- Messages you send to our bot through Facebook Messenger
+- Any content, text, or commands you share with the bot
+
+### 1.2 Information We Receive from Facebook
+- Your Facebook user ID
+- Your first and last name (if available in your Facebook profile)
+- Your profile picture (if available and accessible)
+- Message metadata (message IDs, timestamps)
+
+### 1.3 Automatically Collected Information
+- Bot interaction logs (for debugging and improving service)
+- Message delivery status and response data
+- Command usage statistics
+
+## 2. How We Use Your Information
+
+We use the collected information to:
+- Respond to your messages and commands
+- Provide bot functionality and services
+- Improve and maintain our bot service
+- Debug technical issues
+- Ensure proper operation of bot commands
+
+## 3. Data Storage and Retention
+
+- Message data is processed in real-time and may be temporarily stored for operational purposes
+- User profile information is retrieved from Facebook as needed and not permanently stored
+- Interaction logs may be retained for debugging and service improvement purposes
+- We do not maintain long-term databases of your personal conversations
+
+## 4. Information Sharing and Disclosure
+
+We do not sell, trade, or share your personal information with third parties except:
+- When required by law or legal process
+- To protect the rights, property, or safety of our service or users
+- With Facebook/Meta as required for bot operation through their platform
+
+## 5. Third-Party Services
+
+Our bot operates on Facebook Messenger and uses Facebook's Graph API. Your interactions are subject to:
+- Facebook's Data Policy
+- Facebook's Terms of Service
+- Facebook Messenger Platform policies
+
+## 6. Data Security
+
+We implement reasonable security measures to protect your information, including:
+- Secure API communications with Facebook
+- Access token protection
+- Limited data retention practices
+
+## 7. Your Rights and Choices
+
+You have the right to:
+- Stop using the bot at any time
+- Block or unblock the bot on Facebook Messenger
+- Request information about data we may have collected
+- Report concerns about privacy or data handling
+
+## 8. Children's Privacy
+
+Our bot is not intended for users under 13 years of age. We do not knowingly collect personal information from children under 13.
+
+## 9. Changes to This Privacy Policy
+
+We may update this Privacy Policy from time to time. We will notify users of any material changes by posting the new Privacy Policy with an updated effective date.
+
+## 10. Contact Information
+
+If you have questions about this Privacy Policy or our data practices, please contact us at:
+
+**Email:** [Your Contact Email]
+**Bot Name:** [Your Bot Name]
+
+---
+
+*This Privacy Policy was last updated on 06-07-2025*

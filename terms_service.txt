@@ -1,0 +1,114 @@
+# Terms of Service
+
+**Effective Date:** 06-07-2025
+
+## 1. Acceptance of Terms
+
+By using our Facebook Messenger bot ("GrowaGarden"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Bot.
+
+## 2. Description of Service
+
+The Bot is an automated messaging service that operates on Facebook Messenger and provides:
+- Automated responses to user messages
+- Various commands and functionalities
+- Information retrieval and user interaction features
+- Profile information access (when available)
+
+## 3. User Responsibilities
+
+### 3.1 Acceptable Use
+You agree to use the Bot only for lawful purposes and in accordance with these Terms. You agree not to:
+- Send abusive, threatening, or harassing messages
+- Attempt to hack, manipulate, or disrupt the Bot's operation
+- Use the Bot for spam, commercial solicitation, or unauthorized advertising
+- Share inappropriate, illegal, or harmful content
+- Violate any applicable laws or regulations
+
+### 3.2 Account Requirements
+- You must have a valid Facebook account to use the Bot
+- You are responsible for maintaining the security of your Facebook account
+- You must be at least 13 years old to use the Bot
+
+## 4. Bot Functionality and Limitations
+
+### 4.1 Service Availability
+- The Bot is provided "as is" without guarantees of continuous availability
+- We may temporarily suspend or permanently discontinue the Bot at any time
+- Response times and functionality may vary
+
+### 4.2 Accuracy of Information
+- The Bot provides automated responses and may not always be accurate
+- We do not guarantee the completeness or reliability of Bot responses
+- Users should verify important information independently
+
+## 5. Privacy and Data
+
+Your use of the Bot is also governed by our Privacy Policy, which is incorporated into these Terms by reference.
+
+## 6. Intellectual Property
+
+### 6.1 Our Rights
+- We retain all rights to the Bot's software, design, and functionality
+- The Bot's responses and generated content remain our property
+
+### 6.2 Your Rights
+- You retain ownership of the messages and content you send to the Bot
+- By using the Bot, you grant us permission to process your messages to provide the service
+
+## 7. Disclaimers and Limitation of Liability
+
+### 7.1 Disclaimers
+THE BOT IS PROVIDED "AS IS" WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.
+
+### 7.2 Limitation of Liability
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS OR REVENUES, WHETHER INCURRED DIRECTLY OR INDIRECTLY, OR ANY LOSS OF DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES.
+
+## 8. Indemnification
+
+You agree to indemnify and hold us harmless from any claims, damages, or expenses arising from your use of the Bot or violation of these Terms.
+
+## 9. Third-Party Platforms
+
+### 9.1 Facebook Integration
+- The Bot operates on Facebook Messenger and is subject to Facebook's terms and policies
+- We are not responsible for Facebook's actions, policies, or service availability
+- Your relationship with Facebook is governed by their terms of service
+
+### 9.2 External Links
+The Bot may provide links to external websites or services. We are not responsible for the content or practices of these external sites.
+
+## 10. Termination
+
+### 10.1 Termination by You
+You may stop using the Bot at any time by blocking it on Facebook Messenger or ceasing to interact with it.
+
+### 10.2 Termination by Us
+We reserve the right to terminate or suspend your access to the Bot at our discretion, with or without notice, for any violation of these Terms.
+
+## 11. Changes to Terms
+
+We may modify these Terms at any time. Updated Terms will be posted with a new effective date. Continued use of the Bot after changes constitutes acceptance of the new Terms.
+
+## 12. Governing Law
+
+These Terms are governed by the laws of [Your Jurisdiction] without regard to conflict of law principles.
+
+## 13. Severability
+
+If any provision of these Terms is found to be unenforceable, the remaining provisions will remain in full force and effect.
+
+## 14. Contact Information
+
+For questions about these Terms of Service, please contact us at:
+
+**Email:** [Your Contact Email]
+**Bot Name:** [Your Bot Name]
+**Support:** [Your Support Information]
+
+## 15. Entire Agreement
+
+These Terms, together with our Privacy Policy, constitute the entire agreement between you and us regarding the use of the Bot.
+
+---
+
+*These Terms of Service were last updated on 06-07-2025*
