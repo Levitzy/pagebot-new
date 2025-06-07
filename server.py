@@ -3,6 +3,7 @@ import json
 import os
 import importlib.util
 import logging
+import sys
 
 FUNCTIONS_AVAILABLE = True
 original_send_message = None
@@ -68,6 +69,16 @@ except ImportError as e:
             return None
 
 
+try:
+    from handlers.postback_router import router as postback_router
+
+    POSTBACK_ROUTER_AVAILABLE = True
+    logging.info("Postback router loaded successfully")
+except ImportError as e:
+    logging.error(f"Failed to load postback router: {e}")
+    POSTBACK_ROUTER_AVAILABLE = False
+
+
 app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = config_data.get("page_access_token")
@@ -90,6 +101,11 @@ if not PAGE_ACCESS_TOKEN:
 if not VERIFY_TOKEN:
     logger.warning(
         "Warning: Verify Token is missing from config.json. Webhook verification might fail."
+    )
+
+if not POSTBACK_ROUTER_AVAILABLE:
+    logger.warning(
+        "Warning: Postback router not available. Button interactions will not work properly."
     )
 
 last_bot_message_id_store = {"id": None, "recipient_id": None}
@@ -249,48 +265,25 @@ def webhook_handler():
 
 
 def process_postback(sender_id, payload):
+    """
+    Process postback events using the postback router
+    """
     logger.info(f"Processing postback from {sender_id}: '{payload}'")
 
-    context = {
-        "send_message": enhanced_send_message,
-        "edit_bot_message": edit_bot_message,
-        "prefix": PREFIX,
-        "logger": logger,
-        "config": config_data,
-        "cmd_module_keys": list(cmd_modules.keys()),
-    }
-
     try:
-        if payload.startswith("gagstock_"):
-            if "gagstock" in cmd_modules:
-                gagstock_module = cmd_modules["gagstock"]
-                if hasattr(gagstock_module, "handle_postback") and callable(
-                    getattr(gagstock_module, "handle_postback", None)
-                ):
-                    gagstock_module.handle_postback(
-                        sender_id, payload, enhanced_send_message
-                    )
-                else:
-                    logger.error(
-                        "gagstock module does not have handle_postback function"
-                    )
-                    enhanced_send_message(
-                        sender_id, "Error: Gagstock postback handler not available."
-                    )
-            else:
-                logger.error("gagstock module not found for postback handling")
-                enhanced_send_message(
-                    sender_id, "Error: Gagstock module not available."
-                )
+        if POSTBACK_ROUTER_AVAILABLE:
+            postback_router.route_postback(sender_id, payload, enhanced_send_message)
         else:
-            logger.info(f"Unhandled postback payload: {payload}")
-            enhanced_send_message(sender_id, "Button action not recognized.")
+            logger.error("Postback router not available")
+            enhanced_send_message(sender_id, "❌ Button functionality not available.")
 
     except Exception as e:
         logger.error(
             f"Error processing postback for {sender_id}: {str(e)}", exc_info=True
         )
-        enhanced_send_message(sender_id, "An error occurred processing your request.")
+        enhanced_send_message(
+            sender_id, "❌ An error occurred processing your request."
+        )
 
 
 def process_message(
@@ -335,6 +328,7 @@ def process_message(
         "logger": logger,
         "config": config_data,
         "cmd_module_keys": list(cmd_modules.keys()),
+        "postback_router": postback_router if POSTBACK_ROUTER_AVAILABLE else None,
     }
 
     try:
@@ -379,6 +373,52 @@ def process_message(
             )
 
 
+@app.route("/admin/handlers", methods=["GET"])
+def get_handlers_info():
+    """
+    Admin endpoint to view loaded handlers
+    """
+    if POSTBACK_ROUTER_AVAILABLE:
+        return jsonify(
+            {
+                "status": "success",
+                "loaded_handlers": postback_router.get_loaded_handlers(),
+                "postback_router_available": True,
+            }
+        )
+    else:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Postback router not available",
+                "postback_router_available": False,
+            }
+        )
+
+
+@app.route("/admin/reload-handlers", methods=["POST"])
+def reload_handlers():
+    """
+    Admin endpoint to reload handlers
+    """
+    if POSTBACK_ROUTER_AVAILABLE:
+        try:
+            postback_router.reload_handlers()
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": "Handlers reloaded successfully",
+                    "loaded_handlers": postback_router.get_loaded_handlers(),
+                }
+            )
+        except Exception as e:
+            return jsonify(
+                {"status": "error", "message": f"Failed to reload handlers: {str(e)}"}
+            )
+    else:
+        return jsonify({"status": "error", "message": "Postback router not available"})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flask app on host 0.0.0.0 and port {port}")
@@ -386,5 +426,8 @@ if __name__ == "__main__":
         logger.critical(
             "FATAL: Bot cannot start properly due to missing critical configurations or unavailable function modules."
         )
+
+    if POSTBACK_ROUTER_AVAILABLE:
+        logger.info(f"Loaded handlers: {postback_router.get_loaded_handlers()}")
 
     app.run(host="0.0.0.0", port=port, debug=False)
