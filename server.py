@@ -227,9 +227,15 @@ def webhook_handler():
                                 f"Received message event from {sender_id} without text content. MID: {original_message_id_from_user}"
                             )
                     elif "postback" in messaging_event:
+                        postback_data = messaging_event.get("postback", {})
+                        payload = postback_data.get("payload", "")
                         logger.info(
-                            f"Received postback event from {sender_id}: {messaging_event.get('postback')}"
+                            f"Received postback event from {sender_id}: {payload}"
                         )
+                        if send_typing_indicator:
+                            send_typing_indicator(sender_id, True)
+                            is_typing_on = True
+                        process_postback(sender_id, payload)
                 except Exception as e:
                     logger.error(
                         f"Error in webhook_handler main loop for sender {sender_id}: {e}",
@@ -240,6 +246,51 @@ def webhook_handler():
                         send_typing_indicator(sender_id, False)
 
     return "EVENT_RECEIVED", 200
+
+
+def process_postback(sender_id, payload):
+    logger.info(f"Processing postback from {sender_id}: '{payload}'")
+
+    context = {
+        "send_message": enhanced_send_message,
+        "edit_bot_message": edit_bot_message,
+        "prefix": PREFIX,
+        "logger": logger,
+        "config": config_data,
+        "cmd_module_keys": list(cmd_modules.keys()),
+    }
+
+    try:
+        if payload.startswith("gagstock_"):
+            if "gagstock" in cmd_modules:
+                gagstock_module = cmd_modules["gagstock"]
+                if hasattr(gagstock_module, "handle_postback") and callable(
+                    getattr(gagstock_module, "handle_postback", None)
+                ):
+                    gagstock_module.handle_postback(
+                        sender_id, payload, enhanced_send_message
+                    )
+                else:
+                    logger.error(
+                        "gagstock module does not have handle_postback function"
+                    )
+                    enhanced_send_message(
+                        sender_id, "Error: Gagstock postback handler not available."
+                    )
+            else:
+                logger.error("gagstock module not found for postback handling")
+                enhanced_send_message(
+                    sender_id, "Error: Gagstock module not available."
+                )
+        else:
+            logger.info(f"Unhandled postback payload: {payload}")
+            enhanced_send_message(sender_id, "Button action not recognized.")
+
+    except Exception as e:
+        logger.error(
+            f"Error processing postback for {sender_id}: {str(e)}", exc_info=True
+        )
+        enhanced_send_message(sender_id, "An error occurred processing your request.")
 
 
 def process_message(

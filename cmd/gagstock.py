@@ -4,6 +4,11 @@ import json
 import logging
 from datetime import datetime, timedelta
 import time
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from functions.sendTemplate import send_button_template
 
 try:
     import pytz
@@ -147,7 +152,32 @@ def cleanup_session(sender_id):
         logger.info(f"Cleaned up gagstock session for {sender_id}")
 
 
-def fetch_all_data(sender_id, send_message_func):
+def send_stock_update_with_buttons(sender_id, message, send_message_func):
+    try:
+        buttons = [
+            {
+                "type": "postback",
+                "title": "🔄 Refresh Now",
+                "payload": f"gagstock_refresh_{sender_id}",
+            },
+            {
+                "type": "postback",
+                "title": "🛑 Stop Tracking",
+                "payload": f"gagstock_stop_{sender_id}",
+            },
+        ]
+
+        send_button_template(sender_id, message, buttons)
+        logger.info(f"Sent gagstock update with buttons to {sender_id}")
+    except Exception as e:
+        logger.error(f"Failed to send button template to {sender_id}: {e}")
+        try:
+            send_message_func(sender_id, message)
+        except Exception as fallback_e:
+            logger.error(f"Fallback message also failed for {sender_id}: {fallback_e}")
+
+
+def fetch_all_data(sender_id, send_message_func, force_update=False):
     if sender_id not in active_sessions:
         logger.info(f"Session {sender_id} no longer active, stopping fetch_all_data")
         return
@@ -201,10 +231,12 @@ def fetch_all_data(sender_id, send_message_func):
             logger.info(f"Session {sender_id} was removed during fetch")
             return
 
-        if combined_key == session.get("last_combined_key"):
+        if combined_key == session.get("last_combined_key") and not force_update:
             logger.debug(f"No changes detected for {sender_id}, scheduling next check")
         else:
-            logger.info(f"Data changed for {sender_id}, sending update")
+            logger.info(
+                f"Data changed for {sender_id} or force update requested, sending update"
+            )
             session["last_combined_key"] = combined_key
 
             restocks = get_next_restocks()
@@ -232,8 +264,10 @@ def fetch_all_data(sender_id, send_message_func):
                 f"🌟 Rarity: {weather_rarity}"
             )
 
+            refresh_text = "🔄 Manual Refresh" if force_update else ""
+
             message = (
-                f"🌾 Grow A Garden — Tracker\n\n"
+                f"🌾 Grow A Garden — Tracker {refresh_text}\n\n"
                 f"🛠️ Gear:\n{gear_list}\n⏳ Restock in: {restocks['gear']}\n\n"
                 f"🌱 Seeds:\n{seed_list}\n⏳ Restock in: {restocks['seed']}\n\n"
                 f"🥚 Eggs:\n{egg_list}\n⏳ Restock in: {restocks['egg']}\n\n"
@@ -242,17 +276,13 @@ def fetch_all_data(sender_id, send_message_func):
                 f"{weather_details}"
             )
 
-            if message != session.get("last_message"):
+            if message != session.get("last_message") or force_update:
                 session["last_message"] = message
-                try:
-                    send_message_func(sender_id, message)
-                    logger.info(f"Sent gagstock update to {sender_id}")
-                except Exception as e:
-                    logger.error(f"Failed to send message to {sender_id}: {e}")
+                send_stock_update_with_buttons(sender_id, message, send_message_func)
 
         if sender_id in active_sessions:
             timer = threading.Timer(
-                10.0, fetch_all_data, args=[sender_id, send_message_func]
+                10.0, fetch_all_data, args=[sender_id, send_message_func, False]
             )
             timer.daemon = True
             timer.start()
@@ -263,7 +293,7 @@ def fetch_all_data(sender_id, send_message_func):
         logger.error(f"Timeout fetching data for {sender_id}")
         if sender_id in active_sessions:
             timer = threading.Timer(
-                30.0, fetch_all_data, args=[sender_id, send_message_func]
+                30.0, fetch_all_data, args=[sender_id, send_message_func, False]
             )
             timer.daemon = True
             timer.start()
@@ -273,7 +303,7 @@ def fetch_all_data(sender_id, send_message_func):
         logger.error(f"Network error in gagstock for {sender_id}: {e}")
         if sender_id in active_sessions:
             timer = threading.Timer(
-                20.0, fetch_all_data, args=[sender_id, send_message_func]
+                20.0, fetch_all_data, args=[sender_id, send_message_func, False]
             )
             timer.daemon = True
             timer.start()
@@ -284,13 +314,33 @@ def fetch_all_data(sender_id, send_message_func):
         cleanup_session(sender_id)
 
 
+def handle_postback(sender_id, payload, send_message_func):
+    logger.info(f"Handling gagstock postback for {sender_id}: {payload}")
+
+    if payload.startswith("gagstock_refresh_"):
+        if sender_id in active_sessions:
+            fetch_all_data(sender_id, send_message_func, force_update=True)
+        else:
+            send_message_func(
+                sender_id,
+                "⚠️ No active gagstock session found. Use `gagstock on` to start tracking.",
+            )
+
+    elif payload.startswith("gagstock_stop_"):
+        if sender_id in active_sessions:
+            cleanup_session(sender_id)
+            send_message_func(sender_id, "🛑 Gagstock tracking stopped.")
+        else:
+            send_message_func(sender_id, "⚠️ You don't have an active gagstock session.")
+
+
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
     if not args:
         send_message_func(
             sender_id,
-            "📌 Usage:\n• `gagstock on` to start tracking\n• `gagstock off` to stop tracking",
+            "📌 Usage:\n• `gagstock on` to start tracking\n• `gagstock off` to stop tracking\n• `gagstock refresh` to manually refresh",
         )
         return
 
@@ -304,23 +354,33 @@ def execute(sender_id, args, context):
             send_message_func(sender_id, "⚠️ You don't have an active gagstock session.")
         return
 
+    if action == "refresh":
+        if sender_id in active_sessions:
+            fetch_all_data(sender_id, send_message_func, force_update=True)
+        else:
+            send_message_func(
+                sender_id,
+                "⚠️ No active gagstock session found. Use `gagstock on` to start tracking.",
+            )
+        return
+
     if action != "on":
         send_message_func(
             sender_id,
-            "📌 Usage:\n• `gagstock on` to start tracking\n• `gagstock off` to stop tracking",
+            "📌 Usage:\n• `gagstock on` to start tracking\n• `gagstock off` to stop tracking\n• `gagstock refresh` to manually refresh",
         )
         return
 
     if sender_id in active_sessions:
         send_message_func(
             sender_id,
-            "📡 You're already tracking Gagstock. Use `gagstock off` to stop.",
+            "📡 You're already tracking Gagstock. Use the 🔄 Refresh button or `gagstock off` to stop.",
         )
         return
 
     send_message_func(
         sender_id,
-        "✅ Gagstock tracking started! You'll be notified when stock or weather changes.",
+        "✅ Gagstock tracking started! You'll receive updates with interactive buttons.",
     )
 
     active_sessions[sender_id] = {
