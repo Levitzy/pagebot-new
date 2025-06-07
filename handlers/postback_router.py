@@ -1,6 +1,6 @@
 import logging
-import importlib
 import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -12,27 +12,17 @@ class PostbackRouter:
 
     def load_handlers(self):
         """
-        Dynamically load all handler modules from the handlers directory
+        Load all handler modules from the handlers directory
         """
-        handlers_dir = os.path.dirname(__file__)
+        try:
+            # Import gagstock handler directly
+            from . import gagstock_handler
 
-        for filename in os.listdir(handlers_dir):
-            if filename.endswith("_handler.py"):
-                module_name = filename[:-3]
-                try:
-                    module = importlib.import_module(f"handlers.{module_name}")
+            self.handlers["gagstock_handler"] = gagstock_handler
+            logger.info("Loaded gagstock_handler successfully")
 
-                    if hasattr(module, "get_handler_info"):
-                        handler_info = module.get_handler_info()
-                        self.handlers[handler_info["name"]] = module
-                        logger.info(f"Loaded postback handler: {handler_info['name']}")
-                    else:
-                        logger.warning(
-                            f"Handler {module_name} missing get_handler_info function"
-                        )
-
-                except Exception as e:
-                    logger.error(f"Failed to load handler {module_name}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to load gagstock_handler: {e}")
 
     def route_postback(self, sender_id, payload, send_message_func):
         """
@@ -49,16 +39,23 @@ class PostbackRouter:
                     )
                 else:
                     logger.error("Gagstock handler not loaded")
-                    send_message_func(sender_id, "❌ Gagstock handler not available.")
+                    send_message_func(
+                        sender_id,
+                        "❌ Gagstock handler not available. Try text commands: `gagstock refresh` or `gagstock off`",
+                    )
 
             else:
                 logger.warning(f"No handler found for payload: {payload}")
-                send_message_func(sender_id, "⚠️ Button action not recognized.")
+                send_message_func(
+                    sender_id,
+                    "⚠️ Button action not recognized. Try using text commands instead.",
+                )
 
         except Exception as e:
-            logger.error(f"Error routing postback {payload}: {e}")
+            logger.error(f"Error routing postback {payload}: {e}", exc_info=True)
             send_message_func(
-                sender_id, "❌ An error occurred processing your request."
+                sender_id,
+                "❌ An error occurred processing your request. Try using text commands instead.",
             )
 
     def get_loaded_handlers(self):
@@ -76,4 +73,5 @@ class PostbackRouter:
         logger.info("Reloaded all postback handlers")
 
 
+# Create global router instance
 router = PostbackRouter()
