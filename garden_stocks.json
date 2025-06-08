@@ -1,0 +1,207 @@
+{
+  "timestamp": "2025-06-08T09:27:29.107859",
+  "data": {
+    "gear_stock": [
+      {
+        "name": "Advanced Sprinkler",
+        "value": 1,
+        "image": "https://i.postimg.cc/ZKkcQ1nC/image.png",
+        "emoji": "🌊"
+      },
+      {
+        "name": "Trowel",
+        "value": 1,
+        "image": "https://i.postimg.cc/43RjNNy7/image.png",
+        "emoji": "🛠️"
+      },
+      {
+        "name": "Watering Can",
+        "value": 1,
+        "image": "https://i.postimg.cc/3JPcnJgS/image.png",
+        "emoji": "🚿"
+      },
+      {
+        "name": "Recall Wrench",
+        "value": 3,
+        "image": "https://i.postimg.cc/RFBSySkg/image.png",
+        "emoji": "🔧"
+      },
+      {
+        "name": "Favorite Tool",
+        "value": 2,
+        "image": "https://i.postimg.cc/ZK7qnhNq/image.png",
+        "emoji": "❤️"
+      },
+      {
+        "name": "Harvest Tool",
+        "value": 1,
+        "image": "https://i.postimg.cc/pVD2DNKm/image.png"
+      }
+    ],
+    "egg_stock": [
+      {
+        "name": "Common Egg",
+        "value": 1,
+        "image": "https://i.postimg.cc/x81BptYT/image.png",
+        "emoji": "🥚"
+      },
+      {
+        "name": "Common Egg",
+        "value": 1,
+        "image": "https://i.postimg.cc/x81BptYT/image.png",
+        "emoji": "🥚"
+      },
+      {
+        "name": "Common Egg",
+        "value": 1,
+        "image": "https://i.postimg.cc/x81BptYT/image.png",
+        "emoji": "🥚"
+      }
+    ],
+    "seeds_stock": [
+      {
+        "name": "Carrot",
+        "value": 24,
+        "image": "https://i.postimg.cc/qv5dVtkL/Carrot.png",
+        "emoji": "🥕"
+      },
+      {
+        "name": "Corn",
+        "value": 3,
+        "image": "https://i.postimg.cc/0QG3Qrqh/Corn.png",
+        "emoji": "🌽"
+      },
+      {
+        "name": "Bamboo",
+        "value": 14,
+        "image": "https://i.postimg.cc/5NshLHFV/Bamboo.png",
+        "emoji": "🎍"
+      },
+      {
+        "name": "Strawberry",
+        "value": 4,
+        "image": "https://i.postimg.cc/FFymdsZr/Strawberry.png",
+        "emoji": "🍓"
+      },
+      {
+        "name": "Tomato",
+        "value": 1,
+        "image": "https://i.postimg.cc/MGhxR6ZW/image.png",
+        "emoji": "🍅"
+      },
+      {
+        "name": "Blueberry",
+        "value": 1,
+        "image": "https://i.postimg.cc/RV9SXZ7h/image.png",
+        "emoji": "🫐"
+      }
+    ],
+    "easter_stock": [],
+    "night_stock": [
+      {
+        "name": "Twilight Crate",
+        "value": 1,
+        "image": "https://i.postimg.cc/tJ0T5Gwq/image.png"
+      },
+      {
+        "name": "Star Caller",
+        "value": 1,
+        "image": "https://i.postimg.cc/3wsYMCB9/image.png"
+      }
+    ],
+    "honey_stock": [
+      {
+        "name": "Flower Seed Pack",
+        "value": 2,
+        "image": "https://i.postimg.cc/kMvysGm1/image.png"
+      },
+      {
+        "name": "Lavender",
+        "value": 4,
+        "image": null
+      },
+      {
+        "name": "Nectarshade",
+        "value": 3,
+        "image": null
+      },
+      {
+        "name": "Nectarine",
+        "value": 1,
+        "image": "https://i.postimg.cc/15q8vNGD/image.png"
+      },
+      {
+        "name": "Honey Sprinkler",
+        "value": 1,
+        "image": "https://i.postimg.cc/mkKZCR8Q/image.png"
+      },
+      {
+        "name": "Bee Egg",
+        "value": 1,
+        "image": "https://i.postimg.cc/jSdqfwSH/image.png"
+      },
+      {
+        "name": "Bee Crate",
+        "value": 1,
+        "image": "https://i.postimg.cc/t4hdsc7Z/image.png"
+      },
+      {
+        "name": "Honey Comb",
+        "value": 1,
+        "image": "https://i.postimg.cc/XqJxFktM/image.png"
+      },
+      {
+        "name": "Honey Walkway",
+        "value": 1,
+        "image": null
+      }
+    ],
+    "cosmetics_stock": [
+      {
+        "name": "Common Gnome Crate",
+        "value": 1,
+        "image": "https://i.postimg.cc/DysK3bDw/Common-Gnome-Crate.png"
+      },
+      {
+        "name": "Sign Crate",
+        "value": 1,
+        "image": "https://i.postimg.cc/W1W895nF/Sign-Crate.png"
+      },
+      {
+        "name": "Small Circle Tile",
+        "value": 5,
+        "image": "https://i.postimg.cc/rwmCtSk8/Small-Circle-Tile.png"
+      },
+      {
+        "name": "Red Pottery",
+        "value": 1,
+        "image": "https://i.postimg.cc/sxLfHdvH/Red-Pottery.png"
+      },
+      {
+        "name": "Shovel Grave",
+        "value": 1,
+        "image": "https://i.postimg.cc/9Xb7tr1z/Shovel-Grave.png"
+      },
+      {
+        "name": "Dark Stone Pillar",
+        "value": 1,
+        "image": "https://i.postimg.cc/XvNM51vr/Dark-Stone-Pillar.png"
+      },
+      {
+        "name": "Small Wood Flooring",
+        "value": 4,
+        "image": "https://i.postimg.cc/JnbbWxbQ/Small-Wood-Flooring.png"
+      },
+      {
+        "name": "Wood Fence",
+        "value": 1,
+        "image": "https://i.postimg.cc/4xSvvmfp/Wood-Fence.png"
+      },
+      {
+        "name": "Bookshelf",
+        "value": 1,
+        "image": "https://i.postimg.cc/KzcWK1JB/Book-Shelf.png"
+      }
+    ]
+  }
+}

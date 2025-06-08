@@ -91,7 +91,7 @@ def get_next_restocks():
         else:
             next_7 = now.replace(hour=next_7h_mark, minute=0, second=0, microsecond=0)
 
-        timers["cosmetics"] = get_countdown(next_7)
+        timers["cosmetic"] = get_countdown(next_7)
 
     except Exception as e:
         logger.error(f"Error calculating restocks: {e}")
@@ -100,7 +100,7 @@ def get_next_restocks():
             "gear": "Error",
             "seed": "Error",
             "honey": "Error",
-            "cosmetics": "Error",
+            "cosmetic": "Error",
         }
 
     return timers
@@ -139,7 +139,7 @@ def format_list(arr):
 
 
 def get_available_categories():
-    return ["gear", "seed", "egg", "honey", "cosmetics"]
+    return ["gear", "seed", "egg", "honey", "cosmetic"]
 
 
 def get_category_emoji(category):
@@ -148,7 +148,7 @@ def get_category_emoji(category):
         "seed": "🌱",
         "egg": "🥚",
         "honey": "🍯",
-        "cosmetics": "🎨",
+        "cosmetic": "🎨",
     }
     return category_emojis.get(category, "📦")
 
@@ -157,11 +157,11 @@ def get_all_items_from_stock(stock_data):
     """Extract all items from stock data and format them for processing"""
     all_items = []
     categories = {
-        "gear": stock_data.get("gearStock", []),
-        "seed": stock_data.get("seedsStock", []),
-        "egg": stock_data.get("eggStock", []),
-        "honey": stock_data.get("honeyStock", []),
-        "cosmetics": stock_data.get("cosmeticsStock", []),
+        "gear": stock_data.get("gear", []),
+        "seed": stock_data.get("seed", []),
+        "egg": stock_data.get("egg", []),
+        "honey": stock_data.get("honey", []),
+        "cosmetic": stock_data.get("costmetic", []),
     }
 
     for category, items in categories.items():
@@ -433,7 +433,7 @@ def fetch_all_data(sender_id, send_message_func):
 
         try:
             stock_response = requests.get(
-                "http://65.108.103.151:22377/api/stocks?type=all",
+                "https://vmi2625091.contaboserver.net/api/stocks",
                 timeout=15,
                 headers=headers,
             )
@@ -481,11 +481,11 @@ def fetch_all_data(sender_id, send_message_func):
 
         combined_key = json.dumps(
             {
-                "gearStock": stock_data.get("gearStock", []),
-                "seedsStock": stock_data.get("seedsStock", []),
-                "eggStock": stock_data.get("eggStock", []),
-                "honeyStock": stock_data.get("honeyStock", []),
-                "cosmeticsStock": stock_data.get("cosmeticsStock", []),
+                "gear": stock_data.get("gear", []),
+                "seed": stock_data.get("seed", []),
+                "egg": stock_data.get("egg", []),
+                "honey": stock_data.get("honey", []),
+                "cosmetic": stock_data.get("cosmetic", []),
                 "weatherUpdatedAt": weather_data.get("updatedAt", ""),
                 "weatherCurrent": weather_data.get("currentWeather", ""),
             },
@@ -518,7 +518,7 @@ def fetch_all_data(sender_id, send_message_func):
                         "seed": restocks["seed"],
                         "egg": restocks["egg"],
                         "honey": restocks["honey"],
-                        "cosmetics": restocks["cosmetics"],
+                        "cosmetic": restocks["cosmetic"],
                     }
 
                     for item in favorites_in_stock:
@@ -556,7 +556,7 @@ def fetch_all_data(sender_id, send_message_func):
                 gear_list = format_list(stock_data.get("gearStock", []))
                 seed_list = format_list(stock_data.get("seedsStock", []))
                 egg_list = format_list(stock_data.get("eggStock", []))
-                cosmetics_list = format_list(stock_data.get("cosmeticsStock", []))
+                cosmetic_list = format_list(stock_data.get("cosmeticStock", []))
                 honey_list = format_list(stock_data.get("honeyStock", []))
 
                 weather_icon = weather_data.get("icon", "🌦️")
@@ -581,7 +581,7 @@ def fetch_all_data(sender_id, send_message_func):
                     f"🛠️ **Gear:**\n{gear_list}\n⏳ Restock in: {restocks['gear']}\n\n"
                     f"🌱 **Seeds:**\n{seed_list}\n⏳ Restock in: {restocks['seed']}\n\n"
                     f"🥚 **Eggs:**\n{egg_list}\n⏳ Restock in: {restocks['egg']}\n\n"
-                    f"🎨 **Cosmetics:**\n{cosmetics_list}\n⏳ Restock in: {restocks['cosmetics']}\n\n"
+                    f"🎨 **cosmetic:**\n{cosmetic_list}\n⏳ Restock in: {restocks['cosmetic']}\n\n"
                     f"🍯 **Honey:**\n{honey_list}\n⏳ Restock in: {restocks['honey']}\n\n"
                     f"{weather_details}"
                 )
@@ -705,7 +705,7 @@ def execute(sender_id, args, context):
                     "seed": stock_data.get("seedsStock", []),
                     "egg": stock_data.get("eggStock", []),
                     "honey": stock_data.get("honeyStock", []),
-                    "cosmetics": stock_data.get("cosmeticsStock", []),
+                    "cosmetic": stock_data.get("cosmeticStock", []),
                 }
 
                 message = "📦 **Current Stock:**\n\n"
@@ -898,7 +898,7 @@ def execute(sender_id, args, context):
                 "• `gagstock favorite list` - Show your favorites\n"
                 "• `gagstock favorite clear` - Clear all favorites\n\n"
                 f"📋 **Categories:** {', '.join(get_available_categories())}\n"
-                "💡 **Example:** `gagstock favorite add cosmetics/rainbow_hat`",
+                "💡 **Example:** `gagstock favorite add cosmetic/rainbow_hat`",
             )
             return
 
