@@ -553,11 +553,11 @@ def fetch_all_data(sender_id, send_message_func):
                 should_notify = True
                 restocks = get_next_restocks()
 
-                gear_list = format_list(stock_data.get("gearStock", []))
-                seed_list = format_list(stock_data.get("seedsStock", []))
-                egg_list = format_list(stock_data.get("eggStock", []))
-                cosmetic_list = format_list(stock_data.get("cosmeticStock", []))
-                honey_list = format_list(stock_data.get("honeyStock", []))
+                gear_list = format_list(stock_data.get("gear", []))
+                seed_list = format_list(stock_data.get("seed", []))
+                egg_list = format_list(stock_data.get("egg", []))
+                cosmetic_list = format_list(stock_data.get("cosmetic", []))
+                honey_list = format_list(stock_data.get("honey", []))
 
                 weather_icon = weather_data.get("icon", "🌦️")
                 weather_current = weather_data.get("currentWeather", "Unknown")
