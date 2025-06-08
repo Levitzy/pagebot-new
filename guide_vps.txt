@@ -1,0 +1,32 @@
+main:
+sudo nano /etc/nginx/sites-available/gagv2
+
+# Remove the pagebot-new enabled site
+sudo rm /etc/nginx/sites-enabled/pagebot-new
+
+# Test Nginx configuration
+sudo nginx -t
+
+# If test passes, reload Nginx
+sudo systemctl reload nginx
+
+# Verify it's removed
+ls -la /etc/nginx/sites-enabled/
+
+if you want to update your project you need to restart application services to apply the changes. Here's how:
+
+sudo supervisorctl restart pagebot-new (put your actual name of application services or user of your project file folder name example pagebot-new)
+
+Quick Restart:
+bash# Restart the PageBot service
+sudo supervisorctl restart pagebot-new
+
+if start:
+sudo supervisorctl start pagebot-new
+
+if stop:
+sudo supervisorctl stop pagebot-new
+
+
+# Check if it's running
+sudo supervisorctl status
