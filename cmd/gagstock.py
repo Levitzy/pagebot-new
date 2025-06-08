@@ -154,7 +154,6 @@ def get_category_emoji(category):
 
 
 def get_all_items_from_stock(stock_data):
-    """Extract all items from stock data and format them for processing"""
     all_items = []
     categories = {
         "gear": stock_data.get("gear", []),
@@ -180,7 +179,6 @@ def get_all_items_from_stock(stock_data):
 
 
 def find_item_by_name(item_name, stock_data):
-    """Find item by name in current stock"""
     all_items = get_all_items_from_stock(stock_data)
     item_name_lower = item_name.lower()
 
@@ -191,21 +189,17 @@ def find_item_by_name(item_name, stock_data):
 
 
 def normalize_item_name(name):
-    """Normalize item name for better matching"""
     return name.lower().strip().replace("_", " ").replace("-", " ")
 
 
 def find_item_by_fuzzy_name(item_name, stock_data):
-    """Find item with fuzzy matching including normalized names"""
     all_items = get_all_items_from_stock(stock_data)
     item_name_normalized = normalize_item_name(item_name)
 
-    # Exact match first
     for item in all_items:
         if item_name_normalized == normalize_item_name(item["display_name"]):
             return item
 
-    # Partial match
     for item in all_items:
         item_normalized = normalize_item_name(item["display_name"])
         if (
@@ -218,7 +212,6 @@ def find_item_by_fuzzy_name(item_name, stock_data):
 
 
 def check_favorites_in_stock(sender_id, stock_data):
-    """Check which favorite items are currently in stock"""
     if sender_id not in user_favorites or not user_favorites[sender_id]:
         return []
 
@@ -242,18 +235,15 @@ def check_favorites_in_stock(sender_id, stock_data):
 
 
 def add_favorite(sender_id, item_input, stock_data):
-    """Add item to user's favorites list with improved error handling and validation"""
     if sender_id not in user_favorites:
         user_favorites[sender_id] = {}
 
-    # Check if input has category format: category/item_name
     if "/" in item_input:
         parts = item_input.split("/", 1)
         if len(parts) == 2:
             category = parts[0].lower().strip()
             item_name = parts[1].strip()
 
-            # Validate category
             valid_categories = get_available_categories()
             if category not in valid_categories:
                 return (
@@ -263,17 +253,15 @@ def add_favorite(sender_id, item_input, stock_data):
                     f"💡 Use format: category/item_name (e.g., gear/ancient_shovel)",
                 )
 
-            # Check if item already exists in any category
             for existing_item, existing_category in user_favorites[sender_id].items():
                 if normalize_item_name(existing_item) == normalize_item_name(item_name):
                     return (
                         False,
                         f"❌ '{existing_item}' is already in your favorites!\n"
                         f"📦 Current category: {existing_category}\n"
-                        f"💡 Use `gagstock favorite remove {existing_item}` to remove it first",
+                        f"💡 Use 'gagstock favorite remove {existing_item}' to remove it first",
                     )
 
-            # Try to find the item in current stock for validation and emoji
             item = find_item_by_fuzzy_name(item_name, stock_data)
             if item and item["category"] != category:
                 return (
@@ -282,7 +270,6 @@ def add_favorite(sender_id, item_input, stock_data):
                     f"💡 Use: {item['category']}/{item['display_name']}",
                 )
 
-            # Add to favorites with category
             user_favorites[sender_id][item_name] = category
 
             if item:
@@ -310,7 +297,6 @@ def add_favorite(sender_id, item_input, stock_data):
                 f"💡 Example: gear/ancient_shovel",
             )
     else:
-        # Legacy format: try to find item in current stock
         item = find_item_by_fuzzy_name(item_input, stock_data)
         if not item:
             return (
@@ -321,7 +307,6 @@ def add_favorite(sender_id, item_input, stock_data):
                 f"🔍 Example: gear/{item_input.replace(' ', '_')}",
             )
 
-        # Check if already exists
         for existing_item, existing_category in user_favorites[sender_id].items():
             if normalize_item_name(existing_item) == normalize_item_name(
                 item["display_name"]
@@ -330,7 +315,7 @@ def add_favorite(sender_id, item_input, stock_data):
                     False,
                     f"❌ '{existing_item}' is already in your favorites!\n"
                     f"📦 Category: {existing_category}\n"
-                    f"💡 Use `gagstock favorite remove {existing_item}` to remove it",
+                    f"💡 Use 'gagstock favorite remove {existing_item}' to remove it",
                 )
 
         user_favorites[sender_id][item["display_name"]] = item["category"]
@@ -345,7 +330,6 @@ def add_favorite(sender_id, item_input, stock_data):
 
 
 def remove_favorite(sender_id, item_name):
-    """Remove item from user's favorites with improved matching"""
     if sender_id not in user_favorites or not user_favorites[sender_id]:
         return False, "❌ You don't have any favorites to remove."
 
@@ -370,11 +354,10 @@ def remove_favorite(sender_id, item_name):
 
 
 def list_favorites(sender_id):
-    """List user's favorites organized by category"""
     if sender_id not in user_favorites or not user_favorites[sender_id]:
         return (
             "❌ You don't have any favorites set.\n"
-            f"💡 Add favorites with: `gagstock favorite add category/item_name`\n"
+            f"💡 Add favorites with: 'gagstock favorite add category/item_name'\n"
             f"📋 Categories: {', '.join(get_available_categories())}"
         )
 
@@ -384,23 +367,22 @@ def list_favorites(sender_id):
             favorites_by_category[category] = []
         favorites_by_category[category].append(item_name)
 
-    message = "⭐ **Your Favorites:**\n\n"
+    message = "⭐ Your Favorites:\n\n"
 
     for category in get_available_categories():
         if category in favorites_by_category:
             emoji = get_category_emoji(category)
-            message += f"{emoji} **{category.title()}:**\n"
+            message += f"{emoji} {category.title()}:\n"
             for item in favorites_by_category[category]:
                 message += f"   • {item}\n"
             message += "\n"
 
     message += f"📊 Total: {len(user_favorites[sender_id])} favorite(s)\n"
-    message += f"💡 Remove with: `gagstock favorite remove item_name`"
+    message += f"💡 Remove with: 'gagstock favorite remove item_name'"
     return message
 
 
 def clear_favorites(sender_id):
-    """Clear all user favorites"""
     if sender_id not in user_favorites or not user_favorites[sender_id]:
         return "❌ You don't have any favorites to clear."
 
@@ -410,7 +392,6 @@ def clear_favorites(sender_id):
 
 
 def cleanup_session(sender_id):
-    """Clean up active tracking session"""
     if sender_id in active_sessions:
         session = active_sessions[sender_id]
         timer = session.get("timer")
@@ -421,7 +402,6 @@ def cleanup_session(sender_id):
 
 
 def fetch_all_data(sender_id, send_message_func):
-    """Fetch stock and weather data with improved error handling"""
     if sender_id not in active_sessions:
         logger.info(f"Session {sender_id} no longer active, stopping fetch_all_data")
         return
@@ -511,7 +491,7 @@ def fetch_all_data(sender_id, send_message_func):
                     should_notify = True
                     restocks = get_next_restocks()
 
-                    message = "⭐ **Your favorite items are in stock!**\n\n"
+                    message = "⭐ Your favorite items are in stock!\n\n"
 
                     category_restocks = {
                         "gear": restocks["gear"],
@@ -526,7 +506,7 @@ def fetch_all_data(sender_id, send_message_func):
                         restock_time = category_restocks.get(
                             item["category"], "Unknown"
                         )
-                        message += f"🔔 {emoji_part}**{item['display_name']}**: {format_value(item['value'])}\n"
+                        message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}\n"
                         message += f"   📦 Category: {item['category'].title()} | ⏳ Restock in: {restock_time}\n\n"
 
                     weather_icon = weather_data.get("icon", "🌦️")
@@ -540,7 +520,7 @@ def fetch_all_data(sender_id, send_message_func):
                     weather_rarity = weather_data.get("rarity", "Unknown")
 
                     weather_details = (
-                        f"🌤️ **Weather**: {weather_icon} {weather_current}\n"
+                        f"🌤️ Weather: {weather_icon} {weather_current}\n"
                         f"📖 Description: {weather_description}\n"
                         f"📌 Effect: {weather_effect}\n"
                         f"🪄 Crop Bonus: {weather_bonus}\n"
@@ -568,7 +548,7 @@ def fetch_all_data(sender_id, send_message_func):
                 weather_rarity = weather_data.get("rarity", "Unknown")
 
                 weather_details = (
-                    f"🌤️ **Weather**: {weather_icon} {weather_current}\n"
+                    f"🌤️ Weather: {weather_icon} {weather_current}\n"
                     f"📖 Description: {weather_description}\n"
                     f"📌 Effect: {weather_effect}\n"
                     f"🪄 Crop Bonus: {weather_bonus}\n"
@@ -577,12 +557,12 @@ def fetch_all_data(sender_id, send_message_func):
                 )
 
                 message = (
-                    f"🌾 **Grow A Garden — Tracker**\n\n"
-                    f"🛠️ **Gear:**\n{gear_list}\n⏳ Restock in: {restocks['gear']}\n\n"
-                    f"🌱 **Seeds:**\n{seed_list}\n⏳ Restock in: {restocks['seed']}\n\n"
-                    f"🥚 **Eggs:**\n{egg_list}\n⏳ Restock in: {restocks['egg']}\n\n"
-                    f"🎨 **cosmetic:**\n{cosmetic_list}\n⏳ Restock in: {restocks['cosmetic']}\n\n"
-                    f"🍯 **Honey:**\n{honey_list}\n⏳ Restock in: {restocks['honey']}\n\n"
+                    f"🌾 Grow A Garden — Tracker\n\n"
+                    f"🛠️ Gear:\n{gear_list}\n⏳ Restock in: {restocks['gear']}\n\n"
+                    f"🌱 Seeds:\n{seed_list}\n⏳ Restock in: {restocks['seed']}\n\n"
+                    f"🥚 Eggs:\n{egg_list}\n⏳ Restock in: {restocks['egg']}\n\n"
+                    f"🎨 Cosmetic:\n{cosmetic_list}\n⏳ Restock in: {restocks['cosmetic']}\n\n"
+                    f"🍯 Honey:\n{honey_list}\n⏳ Restock in: {restocks['honey']}\n\n"
                     f"{weather_details}"
                 )
 
@@ -619,7 +599,7 @@ def fetch_all_data(sender_id, send_message_func):
             try:
                 send_message_func(
                     sender_id,
-                    "⚠️ **Stock API temporarily unavailable**\nRetrying in 30 seconds...",
+                    "⚠️ Stock API temporarily unavailable\nRetrying in 30 seconds...",
                 )
             except:
                 pass
@@ -636,7 +616,7 @@ def fetch_all_data(sender_id, send_message_func):
             try:
                 send_message_func(
                     sender_id,
-                    "❌ **Unexpected error occurred**\nStopping tracker. Use `gagstock on` to restart.",
+                    "❌ Unexpected error occurred\nStopping tracker. Use 'gagstock on' to restart.",
                 )
             except:
                 pass
@@ -644,29 +624,28 @@ def fetch_all_data(sender_id, send_message_func):
 
 
 def execute(sender_id, args, context):
-    """Main execution function for gagstock commands"""
     send_message_func = context["send_message"]
 
     if not args:
         send_message_func(
             sender_id,
-            "📌 **Gagstock Commands:**\n\n"
-            "**📊 Tracking:**\n"
-            "• `gagstock on` - Track all stock changes\n"
-            "• `gagstock off` - Stop all stock tracking\n"
-            "• `gagstock favorites on` - Track only favorite items\n"
-            "• `gagstock favorites off` - Stop favorites tracking\n\n"
-            "**⭐ Favorites Management:**\n"
-            "• `gagstock favorite add category/item_name` - Add favorite item\n"
-            "• `gagstock favorite add item_name` - Add from current stock\n"
-            "• `gagstock favorite remove [item_name]` - Remove favorite\n"
-            "• `gagstock favorite list` - Show your favorites\n"
-            "• `gagstock favorite clear` - Clear all favorites\n\n"
-            "**🔍 Stock Information:**\n"
-            "• `gagstock stock` - Show current stock by category\n"
-            "• `gagstock search [item_name]` - Search for items\n\n"
-            f"📋 **Categories:** {', '.join(get_available_categories())}\n"
-            "💡 **Example:** `gagstock favorite add gear/ancient_shovel`",
+            "📌 Gagstock Commands:\n\n"
+            "📊 Tracking:\n"
+            "• 'gagstock on' - Track all stock changes\n"
+            "• 'gagstock off' - Stop all stock tracking\n"
+            "• 'gagstock favorites on' - Track only favorite items\n"
+            "• 'gagstock favorites off' - Stop favorites tracking\n\n"
+            "⭐ Favorites Management:\n"
+            "• 'gagstock favorite add category/item_name' - Add favorite item\n"
+            "• 'gagstock favorite add item_name' - Add from current stock\n"
+            "• 'gagstock favorite remove [item_name]' - Remove favorite\n"
+            "• 'gagstock favorite list' - Show your favorites\n"
+            "• 'gagstock favorite clear' - Clear all favorites\n\n"
+            "🔍 Stock Information:\n"
+            "• 'gagstock stock' - Show current stock by category\n"
+            "• 'gagstock search [item_name]' - Search for items\n\n"
+            f"📋 Categories: {', '.join(get_available_categories())}\n"
+            "💡 Example: 'gagstock favorite add gear/ancient_shovel'",
         )
         return
 
@@ -708,13 +687,13 @@ def execute(sender_id, args, context):
                     "cosmetic": stock_data.get("cosmeticStock", []),
                 }
 
-                message = "📦 **Current Stock:**\n\n"
+                message = "📦 Current Stock:\n\n"
 
                 for category, items in categories.items():
                     emoji = get_category_emoji(category)
                     restock_time = restocks.get(category, "Unknown")
 
-                    message += f"{emoji} **{category.title()}** (⏳ {restock_time}):\n"
+                    message += f"{emoji} {category.title()} (⏳ {restock_time}):\n"
 
                     if items:
                         for item in items:
@@ -729,7 +708,9 @@ def execute(sender_id, args, context):
 
                     message += "\n"
 
-                message += "💡 **Add to favorites:** `gagstock favorite add category/item_name`"
+                message += (
+                    "💡 Add to favorites: 'gagstock favorite add category/item_name'"
+                )
                 send_message_func(sender_id, message)
             else:
                 send_message_func(
@@ -751,7 +732,7 @@ def execute(sender_id, args, context):
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "⚠️ Please specify an item name to search for.\n💡 Example: `gagstock search ancient shovel`",
+                "⚠️ Please specify an item name to search for.\n💡 Example: 'gagstock search ancient shovel'",
             )
             return
 
@@ -773,16 +754,16 @@ def execute(sender_id, args, context):
                     category_emoji = get_category_emoji(item["category"])
                     send_message_func(
                         sender_id,
-                        f"🔍 **Found:** {emoji_part}**{item['display_name']}**\n"
-                        f"{category_emoji} **Category:** {item['category'].title()}\n"
-                        f"💰 **Value:** {format_value(item['value'])}\n\n"
-                        f"💡 **Add to favorites:** `gagstock favorite add {item['category']}/{item['display_name']}`",
+                        f"🔍 Found: {emoji_part}{item['display_name']}\n"
+                        f"{category_emoji} Category: {item['category'].title()}\n"
+                        f"💰 Value: {format_value(item['value'])}\n\n"
+                        f"💡 Add to favorites: 'gagstock favorite add {item['category']}/{item['display_name']}'",
                     )
                 else:
                     send_message_func(
                         sender_id,
                         f"❌ Item '{item_name}' not found in current stock.\n"
-                        f"💡 Try a different spelling or check `gagstock stock` for available items.",
+                        f"💡 Try a different spelling or check 'gagstock stock' for available items.",
                     )
             else:
                 send_message_func(
@@ -798,16 +779,16 @@ def execute(sender_id, args, context):
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "📌 **Favorite Management Commands:**\n\n"
-                "• `gagstock favorite add category/item_name` - Add specific item\n"
-                "• `gagstock favorite add item_name` - Add from current stock\n"
-                "• `gagstock favorite remove [item_name]` - Remove from favorites\n"
-                "• `gagstock favorite list` - Show your favorites\n"
-                "• `gagstock favorite clear` - Clear all favorites\n\n"
-                f"📋 **Categories:** {', '.join(get_available_categories())}\n\n"
-                "💡 **Examples:**\n"
-                "   • `gagstock favorite add egg/legendary_egg`\n"
-                "   • `gagstock favorite add ancient seed` (from current stock)",
+                "📌 Favorite Management Commands:\n\n"
+                "• 'gagstock favorite add category/item_name' - Add specific item\n"
+                "• 'gagstock favorite add item_name' - Add from current stock\n"
+                "• 'gagstock favorite remove [item_name]' - Remove from favorites\n"
+                "• 'gagstock favorite list' - Show your favorites\n"
+                "• 'gagstock favorite clear' - Clear all favorites\n\n"
+                f"📋 Categories: {', '.join(get_available_categories())}\n\n"
+                "💡 Examples:\n"
+                "   • 'gagstock favorite add egg/legendary_egg'\n"
+                "   • 'gagstock favorite add ancient seed' (from current stock)",
             )
             return
 
@@ -818,13 +799,13 @@ def execute(sender_id, args, context):
                 send_message_func(
                     sender_id,
                     "⚠️ Please specify an item to add to favorites.\n\n"
-                    "💡 **Format Options:**\n"
-                    "   • `gagstock favorite add category/item_name`\n"
-                    "   • `gagstock favorite add item_name` (from current stock)\n\n"
-                    f"📋 **Categories:** {', '.join(get_available_categories())}\n\n"
-                    "🔍 **Examples:**\n"
-                    "   • `gagstock favorite add gear/ancient_shovel`\n"
-                    "   • `gagstock favorite add honey/royal_jelly`",
+                    "💡 Format Options:\n"
+                    "   • 'gagstock favorite add category/item_name'\n"
+                    "   • 'gagstock favorite add item_name' (from current stock)\n\n"
+                    f"📋 Categories: {', '.join(get_available_categories())}\n\n"
+                    "🔍 Examples:\n"
+                    "   • 'gagstock favorite add gear/ancient_shovel'\n"
+                    "   • 'gagstock favorite add honey/royal_jelly'",
                 )
                 return
 
@@ -856,7 +837,7 @@ def execute(sender_id, args, context):
                 send_message_func(
                     sender_id,
                     "⚠️ Please specify an item name to remove from favorites.\n"
-                    "💡 Example: `gagstock favorite remove ancient_shovel`",
+                    "💡 Example: 'gagstock favorite remove ancient_shovel'",
                 )
                 return
 
@@ -879,7 +860,7 @@ def execute(sender_id, args, context):
             send_message_func(
                 sender_id,
                 "❌ Unknown favorite command.\n"
-                f"💡 Use: `add`, `remove`, `list`, or `clear`",
+                f"💡 Use: 'add', 'remove', 'list', or 'clear'",
             )
         return
 
@@ -887,18 +868,18 @@ def execute(sender_id, args, context):
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "📌 **Favorites Tracking Commands:**\n\n"
-                "**🔔 Tracking:**\n"
-                "• `gagstock favorites on` - Start tracking only favorite items\n"
-                "• `gagstock favorites off` - Stop favorites tracking\n\n"
-                "**⭐ Management:**\n"
-                "• `gagstock favorite add category/item_name` - Add to favorites\n"
-                "• `gagstock favorite add item_name` - Add from current stock\n"
-                "• `gagstock favorite remove [item_name]` - Remove from favorites\n"
-                "• `gagstock favorite list` - Show your favorites\n"
-                "• `gagstock favorite clear` - Clear all favorites\n\n"
-                f"📋 **Categories:** {', '.join(get_available_categories())}\n"
-                "💡 **Example:** `gagstock favorite add cosmetic/rainbow_hat`",
+                "📌 Favorites Tracking Commands:\n\n"
+                "🔔 Tracking:\n"
+                "• 'gagstock favorites on' - Start tracking only favorite items\n"
+                "• 'gagstock favorites off' - Stop favorites tracking\n\n"
+                "⭐ Management:\n"
+                "• 'gagstock favorite add category/item_name' - Add to favorites\n"
+                "• 'gagstock favorite add item_name' - Add from current stock\n"
+                "• 'gagstock favorite remove [item_name]' - Remove from favorites\n"
+                "• 'gagstock favorite list' - Show your favorites\n"
+                "• 'gagstock favorite clear' - Clear all favorites\n\n"
+                f"📋 Categories: {', '.join(get_available_categories())}\n"
+                "💡 Example: 'gagstock favorite add cosmetic/rainbow_hat'",
             )
             return
 
@@ -909,11 +890,11 @@ def execute(sender_id, args, context):
                 send_message_func(
                     sender_id,
                     "⚠️ You need to add some favorites first!\n\n"
-                    "💡 Use `gagstock favorite add category/item_name` to add items to your favorites.\n"
+                    "💡 Use 'gagstock favorite add category/item_name' to add items to your favorites.\n"
                     f"📋 Categories: {', '.join(get_available_categories())}\n\n"
                     "🔍 Examples:\n"
-                    "   • `gagstock favorite add gear/ancient_shovel`\n"
-                    "   • `gagstock favorite add egg/legendary_egg`",
+                    "   • 'gagstock favorite add gear/ancient_shovel'\n"
+                    "   • 'gagstock favorite add egg/legendary_egg'",
                 )
                 return
 
@@ -926,17 +907,17 @@ def execute(sender_id, args, context):
                 send_message_func(
                     sender_id,
                     f"📡 You're already tracking ({current_mode}).\n"
-                    "💡 Use `gagstock off` to stop current tracking first.",
+                    "💡 Use 'gagstock off' to stop current tracking first.",
                 )
                 return
 
             favorites_list = ", ".join(user_favorites[sender_id].keys())
             send_message_func(
                 sender_id,
-                f"⭐ **Favorites tracking started!**\n"
+                f"⭐ Favorites tracking started!\n"
                 f"🔔 You'll be notified when your favorite items are in stock.\n\n"
-                f"📋 **Current favorites:** {favorites_list}\n\n"
-                f"💡 Add more with: `gagstock favorite add category/item_name`",
+                f"📋 Current favorites: {favorites_list}\n\n"
+                f"💡 Add more with: 'gagstock favorite add category/item_name'",
             )
 
             active_sessions[sender_id] = {
@@ -964,7 +945,7 @@ def execute(sender_id, args, context):
 
         else:
             send_message_func(
-                sender_id, "❌ Unknown favorites command.\n" "💡 Use `on` or `off`"
+                sender_id, "❌ Unknown favorites command.\n" "💡 Use 'on' or 'off'"
             )
         return
 
@@ -978,15 +959,15 @@ def execute(sender_id, args, context):
             send_message_func(
                 sender_id,
                 f"📡 You're already tracking ({current_mode}).\n"
-                "💡 Use `gagstock off` to stop current tracking first.",
+                "💡 Use 'gagstock off' to stop current tracking first.",
             )
             return
 
         send_message_func(
             sender_id,
-            "✅ **Gagstock tracking started!**\n"
+            "✅ Gagstock tracking started!\n"
             "🔔 You'll be notified when stock or weather changes.\n\n"
-            "💡 For favorites-only tracking, use: `gagstock favorites on`",
+            "💡 For favorites-only tracking, use: 'gagstock favorites on'",
         )
 
         active_sessions[sender_id] = {
@@ -1004,5 +985,5 @@ def execute(sender_id, args, context):
         send_message_func(
             sender_id,
             f"❌ Unknown command: '{action}'\n"
-            "💡 Use `gagstock` without arguments to see all available commands.",
+            "💡 Use 'gagstock' without arguments to see all available commands.",
         )
