@@ -4,6 +4,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 import time
+import os
+import pickle
 
 try:
     import pytz
@@ -15,6 +17,31 @@ logger = logging.getLogger(__name__)
 active_sessions = {}
 user_tracked_items = {}
 PH_OFFSET = 8
+TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
+
+
+def load_tracked_items():
+    global user_tracked_items
+    try:
+        if os.path.exists(TRACKED_ITEMS_FILE):
+            with open(TRACKED_ITEMS_FILE, "rb") as f:
+                user_tracked_items = pickle.load(f)
+            logger.info(f"Loaded tracked items for {len(user_tracked_items)} users")
+        else:
+            user_tracked_items = {}
+            logger.info("No existing tracked items file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading tracked items: {e}")
+        user_tracked_items = {}
+
+
+def save_tracked_items_to_file():
+    try:
+        with open(TRACKED_ITEMS_FILE, "wb") as f:
+            pickle.dump(user_tracked_items, f)
+        logger.debug(f"Saved tracked items for {len(user_tracked_items)} users")
+    except Exception as e:
+        logger.error(f"Error saving tracked items: {e}")
 
 
 def pad(n):
@@ -203,9 +230,12 @@ def parse_tracked_items(items_string):
 
 
 def save_tracked_items(sender_id, items):
+    global user_tracked_items
+
     if sender_id not in user_tracked_items:
         user_tracked_items[sender_id] = []
 
+    added_count = 0
     for item in items:
         existing_item = next(
             (
@@ -220,6 +250,13 @@ def save_tracked_items(sender_id, items):
 
         if not existing_item:
             user_tracked_items[sender_id].append(item)
+            added_count += 1
+            logger.info(
+                f"Added tracked item for {sender_id}: {item['category']}/{item['item_name']}"
+            )
+
+    save_tracked_items_to_file()
+    return added_count
 
 
 def add_tracked_items(sender_id, items_string):
@@ -231,14 +268,32 @@ def add_tracked_items(sender_id, items_string):
             "❌ Invalid format. Use: category/item_name or category/item1|category/item2",
         )
 
-    added_items = []
+    valid_items = []
     invalid_categories = []
+    duplicate_items = []
+
+    if sender_id not in user_tracked_items:
+        user_tracked_items[sender_id] = []
 
     for item in items:
         if item["category"] not in get_available_categories():
             invalid_categories.append(item["category"])
         else:
-            added_items.append(item)
+            existing_item = next(
+                (
+                    x
+                    for x in user_tracked_items[sender_id]
+                    if x["category"] == item["category"]
+                    and normalize_item_name(x["item_name"])
+                    == normalize_item_name(item["item_name"])
+                ),
+                None,
+            )
+
+            if existing_item:
+                duplicate_items.append(f"{item['category']}/{item['item_name']}")
+            else:
+                valid_items.append(item)
 
     if invalid_categories:
         return (
@@ -246,22 +301,46 @@ def add_tracked_items(sender_id, items_string):
             f"❌ Invalid categories: {', '.join(invalid_categories)}\n📋 Valid categories: {', '.join(get_available_categories())}",
         )
 
-    save_tracked_items(sender_id, added_items)
+    if not valid_items and duplicate_items:
+        return False, f"❌ Items already tracked: {', '.join(duplicate_items)}"
 
-    if len(added_items) == 1:
-        item = added_items[0]
-        category_emoji = get_category_emoji(item["category"])
-        return (
-            True,
-            f"✅ Added '{item['item_name']}' to tracking list!\n{category_emoji} Category: {item['category'].title()}\n🔔 You'll be notified when this item appears in stock.",
-        )
-    else:
-        message = f"✅ Added {len(added_items)} items to tracking list:\n"
-        for item in added_items:
+    added_count = save_tracked_items(sender_id, valid_items)
+
+    message_parts = []
+
+    if added_count > 0:
+        if added_count == 1:
+            item = valid_items[0]
             category_emoji = get_category_emoji(item["category"])
-            message += f"{category_emoji} {item['category']}/{item['item_name']}\n"
-        message += "🔔 You'll be notified when these items appear in stock."
-        return True, message
+            message_parts.append(
+                f"✅ Added '{item['item_name']}' to tracking list!\n{category_emoji} Category: {item['category'].title()}"
+            )
+        else:
+            message_parts.append(f"✅ Added {added_count} items to tracking list:")
+            for item in valid_items:
+                category_emoji = get_category_emoji(item["category"])
+                message_parts.append(
+                    f"{category_emoji} {item['category']}/{item['item_name']}"
+                )
+
+        message_parts.append("🔔 You'll be notified when these items appear in stock.")
+
+        if sender_id in active_sessions:
+            session_type = (
+                "tracked items only"
+                if active_sessions[sender_id].get("tracked_only", False)
+                else "all stocks"
+            )
+            message_parts.append(f"📡 Current tracking mode: {session_type}")
+            if not active_sessions[sender_id].get("tracked_only", False):
+                message_parts.append(
+                    "💡 Use 'gagstock off' then track items to switch to item-only mode"
+                )
+
+    if duplicate_items:
+        message_parts.append(f"⚠️ Already tracking: {', '.join(duplicate_items)}")
+
+    return True, "\n".join(message_parts)
 
 
 def remove_tracked_item(sender_id, item_string):
@@ -283,6 +362,10 @@ def remove_tracked_item(sender_id, item_string):
             and normalize_item_name(tracked_item["item_name"]) == item_name_normalized
         ):
             removed_item = user_tracked_items[sender_id].pop(i)
+            save_tracked_items_to_file()
+            logger.info(
+                f"Removed tracked item for {sender_id}: {removed_item['category']}/{removed_item['item_name']}"
+            )
             return (
                 True,
                 f"✅ Removed '{removed_item['category']}/{removed_item['item_name']}' from tracking list.",
@@ -316,7 +399,19 @@ def list_tracked_items(sender_id):
                 message += f"   • {item}\n"
             message += "\n"
 
+    session_status = ""
+    if sender_id in active_sessions:
+        session_type = (
+            "tracked items only"
+            if active_sessions[sender_id].get("tracked_only", False)
+            else "all stocks"
+        )
+        session_status = f"📡 Currently tracking: {session_type}\n"
+    else:
+        session_status = "📴 Tracking: OFF\n"
+
     message += f"📊 Total: {len(user_tracked_items[sender_id])} tracked item(s)\n"
+    message += session_status
     message += "💡 Remove with: 'gagstock remove category/item_name'"
     return message
 
@@ -327,6 +422,8 @@ def clear_tracked_items(sender_id):
 
     count = len(user_tracked_items[sender_id])
     user_tracked_items[sender_id] = []
+    save_tracked_items_to_file()
+    logger.info(f"Cleared {count} tracked items for {sender_id}")
     return f"✅ Cleared {count} tracked item(s) successfully."
 
 
@@ -588,6 +685,8 @@ def fetch_all_data(sender_id, send_message_func):
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
+    load_tracked_items()
+
     if not args:
         send_message_func(
             sender_id,
@@ -839,21 +938,15 @@ def execute(sender_id, args, context):
         if "/" in action:
             items_string = " ".join(args)
 
-            if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
-                success, message = add_tracked_items(sender_id, items_string)
-                if success:
-                    if sender_id in active_sessions:
-                        current_mode = (
-                            "tracked items only"
-                            if active_sessions[sender_id].get("tracked_only", False)
-                            else "all stocks"
-                        )
-                        send_message_func(
-                            sender_id,
-                            f"{message}\n\n📡 Currently tracking: {current_mode}\n"
-                            "💡 Use 'gagstock off' then start item-only tracking",
-                        )
-                    else:
+            success, message = add_tracked_items(sender_id, items_string)
+            if success:
+                if sender_id in active_sessions:
+                    send_message_func(sender_id, message)
+                else:
+                    if (
+                        sender_id in user_tracked_items
+                        and user_tracked_items[sender_id]
+                    ):
                         send_message_func(
                             sender_id,
                             f"{message}\n\n🔔 Starting item-specific tracking...",
@@ -870,10 +963,9 @@ def execute(sender_id, args, context):
                             f"Started tracked-items-only gagstock session for {sender_id}"
                         )
                         fetch_all_data(sender_id, send_message_func)
-                else:
-                    send_message_func(sender_id, message)
+                    else:
+                        send_message_func(sender_id, message)
             else:
-                success, message = add_tracked_items(sender_id, items_string)
                 send_message_func(sender_id, message)
         else:
             send_message_func(
