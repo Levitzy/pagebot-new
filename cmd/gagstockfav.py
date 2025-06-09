@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 active_sessions = {}
 user_tracked_items = {}
+user_favorite_sessions = {}
 PH_OFFSET = 8
 TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
 
@@ -460,7 +461,200 @@ def cleanup_session(sender_id):
         logger.info(f"Cleaned up gagstock session for {sender_id}")
 
 
-def fetch_all_data(sender_id, send_message_func):
+def cleanup_favorite_session(sender_id):
+    if sender_id in user_favorite_sessions:
+        session = user_favorite_sessions[sender_id]
+        timer = session.get("timer")
+        if timer:
+            timer.cancel()
+        del user_favorite_sessions[sender_id]
+        logger.info(f"Cleaned up gagstockfav session for {sender_id}")
+
+
+def fetch_favorite_data(sender_id, send_message_func):
+    if sender_id not in user_favorite_sessions:
+        logger.info(
+            f"Favorite session {sender_id} no longer active, stopping fetch_favorite_data"
+        )
+        return
+
+    try:
+        logger.debug(f"Fetching data for gagstockfav session {sender_id}")
+
+        headers = {"User-Agent": "GagStock-Bot/1.0"}
+
+        try:
+            stock_response = requests.get(
+                "https://vmi2625091.contaboserver.net/api/stocks",
+                timeout=15,
+                headers=headers,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Stock API request failed for favorites: {e}")
+            raise
+
+        try:
+            weather_response = requests.get(
+                "https://growagardenstock.com/api/stock/weather",
+                timeout=15,
+                headers=headers,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Weather API request failed for favorites: {e}")
+            raise
+
+        if stock_response.status_code != 200:
+            logger.error(
+                f"Stock API error for favorites: {stock_response.status_code} - {stock_response.text}"
+            )
+            raise requests.RequestException(
+                f"Stock API returned {stock_response.status_code}"
+            )
+
+        if weather_response.status_code != 200:
+            logger.error(
+                f"Weather API error for favorites: {weather_response.status_code} - {weather_response.text}"
+            )
+            raise requests.RequestException(
+                f"Weather API returned {weather_response.status_code}"
+            )
+
+        try:
+            stock_data = stock_response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse stock data JSON for favorites: {e}")
+            raise
+
+        try:
+            weather_data = weather_response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse weather data JSON for favorites: {e}")
+            raise
+
+        combined_key = json.dumps(
+            {
+                "gear": stock_data.get("gear", []),
+                "seed": stock_data.get("seed", []),
+                "egg": stock_data.get("egg", []),
+                "honey": stock_data.get("honey", []),
+                "cosmetic": stock_data.get("cosmetic", []),
+                "weatherUpdatedAt": weather_data.get("updatedAt", ""),
+                "weatherCurrent": weather_data.get("currentWeather", ""),
+            },
+            sort_keys=True,
+        )
+
+        session = user_favorite_sessions.get(sender_id)
+        if not session:
+            logger.info(f"Favorite session {sender_id} was removed during fetch")
+            return
+
+        if combined_key == session.get("last_combined_key"):
+            logger.debug(
+                f"No changes detected for favorites {sender_id}, scheduling next check"
+            )
+        else:
+            logger.info(
+                f"Data changed for favorites {sender_id}, checking tracked items"
+            )
+            session["last_combined_key"] = combined_key
+
+            tracked_in_stock = check_tracked_items_in_stock(sender_id, stock_data)
+            if tracked_in_stock:
+                restocks = get_next_restocks()
+
+                message = "⭐ Your favorite tracked items are in stock!\n\n"
+
+                category_restocks = {
+                    "gear": restocks["gear"],
+                    "seed": restocks["seed"],
+                    "egg": restocks["egg"],
+                    "honey": restocks["honey"],
+                    "cosmetic": restocks["cosmetic"],
+                }
+
+                for item in tracked_in_stock:
+                    emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                    restock_time = category_restocks.get(item["category"], "Unknown")
+                    message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}\n"
+                    message += f"   📦 Category: {item['category'].title()} | ⏳ Restock in: {restock_time}\n\n"
+
+                weather_icon = weather_data.get("icon", "🌦️")
+                weather_current = weather_data.get("currentWeather", "Unknown")
+                weather_description = weather_data.get("description", "No description")
+                weather_effect = weather_data.get("effectDescription", "No effect")
+                weather_bonus = weather_data.get("cropBonuses", "No bonus")
+                weather_visual = weather_data.get("visualCue", "No visual cue")
+                weather_rarity = weather_data.get("rarity", "Unknown")
+
+                weather_details = (
+                    f"🌤️ Weather: {weather_icon} {weather_current}\n"
+                    f"📖 Description: {weather_description}\n"
+                    f"📌 Effect: {weather_effect}\n"
+                    f"🪄 Crop Bonus: {weather_bonus}\n"
+                    f"📢 Visual Cue: {weather_visual}\n"
+                    f"🌟 Rarity: {weather_rarity}"
+                )
+
+                message += weather_details
+
+                if message != session.get("last_message"):
+                    session["last_message"] = message
+                    try:
+                        send_message_func(sender_id, message)
+                        logger.info(f"Sent gagstockfav update to {sender_id}")
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to send favorite message to {sender_id}: {e}"
+                        )
+
+        if sender_id in user_favorite_sessions:
+            timer = threading.Timer(
+                10.0, fetch_favorite_data, args=[sender_id, send_message_func]
+            )
+            timer.daemon = True
+            timer.start()
+            user_favorite_sessions[sender_id]["timer"] = timer
+            logger.debug(f"Scheduled next favorite fetch for {sender_id} in 10 seconds")
+
+    except requests.Timeout:
+        logger.error(f"Timeout fetching favorite data for {sender_id}")
+        if sender_id in user_favorite_sessions:
+            timer = threading.Timer(
+                30.0, fetch_favorite_data, args=[sender_id, send_message_func]
+            )
+            timer.daemon = True
+            timer.start()
+            user_favorite_sessions[sender_id]["timer"] = timer
+
+    except requests.RequestException as e:
+        logger.error(f"Network error in gagstockfav for {sender_id}: {e}")
+        if sender_id in user_favorite_sessions:
+            try:
+                send_message_func(
+                    sender_id,
+                    "⚠️ Stock API temporarily unavailable for favorites\nRetrying in 30 seconds...",
+                )
+            except:
+                pass
+            timer = threading.Timer(
+                30.0, fetch_favorite_data, args=[sender_id, send_message_func]
+            )
+            timer.daemon = True
+            timer.start()
+            user_favorite_sessions[sender_id]["timer"] = timer
+
+    except Exception as e:
+        logger.error(f"Unexpected error in gagstockfav for {sender_id}: {e}")
+        if sender_id in user_favorite_sessions:
+            try:
+                send_message_func(
+                    sender_id,
+                    "❌ Unexpected error occurred in favorites\nStopping tracker. Use 'gagstockfav on' to restart.",
+                )
+            except:
+                pass
+        cleanup_favorite_session(sender_id)
     if sender_id not in active_sessions:
         logger.info(f"Session {sender_id} no longer active, stopping fetch_all_data")
         return
