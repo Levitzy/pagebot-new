@@ -815,7 +815,7 @@ def execute(sender_id, args, context):
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "⚠️ Please specify an item to remove from favorites.\n"
+                "⚠️ Please specify an item to remove from favorites\n"
                 "💡 Format: 'gagstock remove category/item_name'\n"
                 "📋 Example: 'gagstock remove gear/ancient_shovel'",
             )
