@@ -13,7 +13,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 active_sessions = {}
-user_favorites = {}
+user_tracked_items = {}
 PH_OFFSET = 8
 
 
@@ -178,217 +178,179 @@ def get_all_items_from_stock(stock_data):
     return all_items
 
 
-def find_item_by_name(item_name, stock_data):
-    all_items = get_all_items_from_stock(stock_data)
-    item_name_lower = item_name.lower()
-
-    for item in all_items:
-        if item_name_lower in item["name"] or item["name"] in item_name_lower:
-            return item
-    return None
-
-
 def normalize_item_name(name):
     return name.lower().strip().replace("_", " ").replace("-", " ")
 
 
-def find_item_by_fuzzy_name(item_name, stock_data):
-    all_items = get_all_items_from_stock(stock_data)
-    item_name_normalized = normalize_item_name(item_name)
-
-    for item in all_items:
-        if item_name_normalized == normalize_item_name(item["display_name"]):
-            return item
-
-    for item in all_items:
-        item_normalized = normalize_item_name(item["display_name"])
-        if (
-            item_name_normalized in item_normalized
-            or item_normalized in item_name_normalized
-        ):
-            return item
-
-    return None
-
-
-def check_favorites_in_stock(sender_id, stock_data):
-    if sender_id not in user_favorites or not user_favorites[sender_id]:
-        return []
-
-    favorites_in_stock = []
-    all_items = get_all_items_from_stock(stock_data)
-
-    for favorite_item, favorite_category in user_favorites[sender_id].items():
-        for item in all_items:
-            item_normalized = normalize_item_name(item["display_name"])
-            favorite_normalized = normalize_item_name(favorite_item)
-
-            if (
-                favorite_normalized == item_normalized
-                or favorite_normalized in item_normalized
-                or item_normalized in favorite_normalized
-            ) and item["category"] == favorite_category:
-                favorites_in_stock.append(item)
-                break
-
-    return favorites_in_stock
-
-
-def add_favorite(sender_id, item_input, stock_data):
-    if sender_id not in user_favorites:
-        user_favorites[sender_id] = {}
-
-    if "/" in item_input:
-        parts = item_input.split("/", 1)
-        if len(parts) == 2:
-            category = parts[0].lower().strip()
-            item_name = parts[1].strip()
-
-            valid_categories = get_available_categories()
-            if category not in valid_categories:
-                return (
-                    False,
-                    f"❌ Invalid category '{category}'.\n"
-                    f"📋 Valid categories: {', '.join(valid_categories)}\n"
-                    f"💡 Use format: category/item_name (e.g., gear/ancient_shovel)",
-                )
-
-            for existing_item, existing_category in user_favorites[sender_id].items():
-                if normalize_item_name(existing_item) == normalize_item_name(item_name):
-                    return (
-                        False,
-                        f"❌ '{existing_item}' is already in your favorites!\n"
-                        f"📦 Current category: {existing_category}\n"
-                        f"💡 Use 'gagstock favorite remove {existing_item}' to remove it first",
-                    )
-
-            item = find_item_by_fuzzy_name(item_name, stock_data)
-            if item and item["category"] != category:
-                return (
-                    False,
-                    f"⚠️ '{item_name}' found in '{item['category']}' category, not '{category}'.\n"
-                    f"💡 Use: {item['category']}/{item['display_name']}",
-                )
-
-            user_favorites[sender_id][item_name] = category
-
-            if item:
-                emoji_part = f"{item['emoji']} " if item["emoji"] else ""
-                return (
-                    True,
-                    f"✅ Added '{emoji_part}{item['display_name']}' to your favorites!\n"
-                    f"📦 Category: {category.title()}\n"
-                    f"🔔 You'll be notified when this item appears in stock.",
-                )
-            else:
-                category_emoji = get_category_emoji(category)
-                return (
-                    True,
-                    f"✅ Added '{item_name}' to your favorites!\n"
-                    f"{category_emoji} Category: {category.title()}\n"
-                    f"💡 This item will be tracked when it appears in stock.\n"
-                    f"🔔 You'll be notified when it becomes available.",
-                )
-        else:
-            return (
-                False,
-                f"❌ Invalid format. Use: category/item_name\n"
-                f"📋 Categories: {', '.join(get_available_categories())}\n"
-                f"💡 Example: gear/ancient_shovel",
-            )
+def parse_tracked_items(items_string):
+    items = []
+    if "|" in items_string:
+        parts = items_string.split("|")
     else:
-        item = find_item_by_fuzzy_name(item_input, stock_data)
-        if not item:
-            return (
-                False,
-                f"❌ Item '{item_input}' not found in current stock.\n"
-                f"💡 Use format: category/item_name\n"
-                f"📋 Categories: {', '.join(get_available_categories())}\n"
-                f"🔍 Example: gear/{item_input.replace(' ', '_')}",
-            )
+        parts = [items_string]
 
-        for existing_item, existing_category in user_favorites[sender_id].items():
-            if normalize_item_name(existing_item) == normalize_item_name(
-                item["display_name"]
-            ):
-                return (
-                    False,
-                    f"❌ '{existing_item}' is already in your favorites!\n"
-                    f"📦 Category: {existing_category}\n"
-                    f"💡 Use 'gagstock favorite remove {existing_item}' to remove it",
-                )
+    for part in parts:
+        part = part.strip()
+        if "/" in part:
+            category, item_name = part.split("/", 1)
+            category = category.lower().strip()
+            item_name = item_name.strip()
 
-        user_favorites[sender_id][item["display_name"]] = item["category"]
-        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+            if category in get_available_categories():
+                items.append({"category": category, "item_name": item_name})
+
+    return items
+
+
+def save_tracked_items(sender_id, items):
+    if sender_id not in user_tracked_items:
+        user_tracked_items[sender_id] = []
+
+    for item in items:
+        existing_item = next(
+            (
+                x
+                for x in user_tracked_items[sender_id]
+                if x["category"] == item["category"]
+                and normalize_item_name(x["item_name"])
+                == normalize_item_name(item["item_name"])
+            ),
+            None,
+        )
+
+        if not existing_item:
+            user_tracked_items[sender_id].append(item)
+
+
+def add_tracked_items(sender_id, items_string):
+    items = parse_tracked_items(items_string)
+
+    if not items:
+        return (
+            False,
+            "❌ Invalid format. Use: category/item_name or category/item1|category/item2",
+        )
+
+    added_items = []
+    invalid_categories = []
+
+    for item in items:
+        if item["category"] not in get_available_categories():
+            invalid_categories.append(item["category"])
+        else:
+            added_items.append(item)
+
+    if invalid_categories:
+        return (
+            False,
+            f"❌ Invalid categories: {', '.join(invalid_categories)}\n📋 Valid categories: {', '.join(get_available_categories())}",
+        )
+
+    save_tracked_items(sender_id, added_items)
+
+    if len(added_items) == 1:
+        item = added_items[0]
         category_emoji = get_category_emoji(item["category"])
         return (
             True,
-            f"✅ Added '{emoji_part}{item['display_name']}' to your favorites!\n"
-            f"{category_emoji} Category: {item['category'].title()}\n"
-            f"🔔 You'll be notified when this item restocks.",
+            f"✅ Added '{item['item_name']}' to tracking list!\n{category_emoji} Category: {item['category'].title()}\n🔔 You'll be notified when this item appears in stock.",
         )
+    else:
+        message = f"✅ Added {len(added_items)} items to tracking list:\n"
+        for item in added_items:
+            category_emoji = get_category_emoji(item["category"])
+            message += f"{category_emoji} {item['category']}/{item['item_name']}\n"
+        message += "🔔 You'll be notified when these items appear in stock."
+        return True, message
 
 
-def remove_favorite(sender_id, item_name):
-    if sender_id not in user_favorites or not user_favorites[sender_id]:
-        return False, "❌ You don't have any favorites to remove."
+def remove_tracked_item(sender_id, item_string):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return False, "❌ You don't have any tracked items to remove."
+
+    if "/" not in item_string:
+        return False, "❌ Please use format: category/item_name"
+
+    category, item_name = item_string.split("/", 1)
+    category = category.lower().strip()
+    item_name = item_name.strip()
 
     item_name_normalized = normalize_item_name(item_name)
-    removed_item = None
 
-    for favorite_item, category in list(user_favorites[sender_id].items()):
-        favorite_normalized = normalize_item_name(favorite_item)
+    for i, tracked_item in enumerate(user_tracked_items[sender_id]):
         if (
-            favorite_normalized == item_name_normalized
-            or item_name_normalized in favorite_normalized
-            or favorite_normalized in item_name_normalized
+            tracked_item["category"] == category
+            and normalize_item_name(tracked_item["item_name"]) == item_name_normalized
         ):
-            del user_favorites[sender_id][favorite_item]
-            removed_item = favorite_item
-            break
+            removed_item = user_tracked_items[sender_id].pop(i)
+            return (
+                True,
+                f"✅ Removed '{removed_item['category']}/{removed_item['item_name']}' from tracking list.",
+            )
 
-    if removed_item:
-        return True, f"✅ Removed '{removed_item}' from your favorites."
-    else:
-        return False, f"❌ '{item_name}' not found in your favorites."
+    return False, f"❌ '{category}/{item_name}' not found in your tracking list."
 
 
-def list_favorites(sender_id):
-    if sender_id not in user_favorites or not user_favorites[sender_id]:
+def list_tracked_items(sender_id):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return (
-            "❌ You don't have any favorites set.\n"
-            f"💡 Add favorites with: 'gagstock favorite add category/item_name'\n"
+            "❌ You don't have any tracked items.\n"
+            "💡 Add items with: 'gagstock category/item_name'\n"
             f"📋 Categories: {', '.join(get_available_categories())}"
         )
 
-    favorites_by_category = {}
-    for item_name, category in user_favorites[sender_id].items():
-        if category not in favorites_by_category:
-            favorites_by_category[category] = []
-        favorites_by_category[category].append(item_name)
+    tracked_by_category = {}
+    for item in user_tracked_items[sender_id]:
+        category = item["category"]
+        if category not in tracked_by_category:
+            tracked_by_category[category] = []
+        tracked_by_category[category].append(item["item_name"])
 
-    message = "⭐ Your Favorites:\n\n"
+    message = "🔔 Your Tracked Items:\n\n"
 
     for category in get_available_categories():
-        if category in favorites_by_category:
+        if category in tracked_by_category:
             emoji = get_category_emoji(category)
             message += f"{emoji} {category.title()}:\n"
-            for item in favorites_by_category[category]:
+            for item in tracked_by_category[category]:
                 message += f"   • {item}\n"
             message += "\n"
 
-    message += f"📊 Total: {len(user_favorites[sender_id])} favorite(s)\n"
-    message += f"💡 Remove with: 'gagstock favorite remove item_name'"
+    message += f"📊 Total: {len(user_tracked_items[sender_id])} tracked item(s)\n"
+    message += "💡 Remove with: 'gagstock remove category/item_name'"
     return message
 
 
-def clear_favorites(sender_id):
-    if sender_id not in user_favorites or not user_favorites[sender_id]:
-        return "❌ You don't have any favorites to clear."
+def clear_tracked_items(sender_id):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return "❌ You don't have any tracked items to clear."
 
-    count = len(user_favorites[sender_id])
-    user_favorites[sender_id] = {}
-    return f"✅ Cleared {count} favorite(s) successfully."
+    count = len(user_tracked_items[sender_id])
+    user_tracked_items[sender_id] = []
+    return f"✅ Cleared {count} tracked item(s) successfully."
+
+
+def check_tracked_items_in_stock(sender_id, stock_data):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return []
+
+    tracked_in_stock = []
+    all_items = get_all_items_from_stock(stock_data)
+
+    for tracked_item in user_tracked_items[sender_id]:
+        for item in all_items:
+            item_normalized = normalize_item_name(item["display_name"])
+            tracked_normalized = normalize_item_name(tracked_item["item_name"])
+
+            if (
+                tracked_normalized == item_normalized
+                or tracked_normalized in item_normalized
+                or item_normalized in tracked_normalized
+            ) and item["category"] == tracked_item["category"]:
+                tracked_in_stock.append(item)
+                break
+
+    return tracked_in_stock
 
 
 def cleanup_session(sender_id):
@@ -485,13 +447,13 @@ def fetch_all_data(sender_id, send_message_func):
 
             should_notify = False
 
-            if session.get("favorites_only", False):
-                favorites_in_stock = check_favorites_in_stock(sender_id, stock_data)
-                if favorites_in_stock:
+            if session.get("tracked_only", False):
+                tracked_in_stock = check_tracked_items_in_stock(sender_id, stock_data)
+                if tracked_in_stock:
                     should_notify = True
                     restocks = get_next_restocks()
 
-                    message = "⭐ Your favorite items are in stock!\n\n"
+                    message = "🔔 Your tracked items are in stock!\n\n"
 
                     category_restocks = {
                         "gear": restocks["gear"],
@@ -501,7 +463,7 @@ def fetch_all_data(sender_id, send_message_func):
                         "cosmetic": restocks["cosmetic"],
                     }
 
-                    for item in favorites_in_stock:
+                    for item in tracked_in_stock:
                         emoji_part = f"{item['emoji']} " if item["emoji"] else ""
                         restock_time = category_restocks.get(
                             item["category"], "Unknown"
@@ -632,20 +594,22 @@ def execute(sender_id, args, context):
             "📌 Gagstock Commands:\n\n"
             "📊 Tracking:\n"
             "• 'gagstock on' - Track all stock changes\n"
-            "• 'gagstock off' - Stop all stock tracking\n"
-            "• 'gagstock favorites on' - Track only favorite items\n"
-            "• 'gagstock favorites off' - Stop favorites tracking\n\n"
-            "⭐ Favorites Management:\n"
-            "• 'gagstock favorite add category/item_name' - Add favorite item\n"
-            "• 'gagstock favorite add item_name' - Add from current stock\n"
-            "• 'gagstock favorite remove [item_name]' - Remove favorite\n"
-            "• 'gagstock favorite list' - Show your favorites\n"
-            "• 'gagstock favorite clear' - Clear all favorites\n\n"
+            "• 'gagstock off' - Stop stock tracking\n\n"
+            "🔔 Item Notifications:\n"
+            "• 'gagstock category/item_name' - Track specific item\n"
+            "• 'gagstock cat1/item1|cat2/item2' - Track multiple items\n"
+            "• 'gagstock add category/item_name' - Add item to tracking\n"
+            "• 'gagstock remove category/item_name' - Remove tracked item\n"
+            "• 'gagstock list' - Show tracked items\n"
+            "• 'gagstock clear' - Clear all tracked items\n\n"
             "🔍 Stock Information:\n"
             "• 'gagstock stock' - Show current stock by category\n"
             "• 'gagstock search [item_name]' - Search for items\n\n"
             f"📋 Categories: {', '.join(get_available_categories())}\n"
-            "💡 Example: 'gagstock favorite add gear/ancient_shovel'",
+            "💡 Examples:\n"
+            "   • 'gagstock gear/ancient_shovel'\n"
+            "   • 'gagstock egg/legendary_egg|gear/shovel'\n"
+            "   • 'gagstock add honey/royal_jelly'",
         )
         return
 
@@ -654,8 +618,8 @@ def execute(sender_id, args, context):
     if action == "off":
         if sender_id in active_sessions:
             session_type = (
-                "favorites"
-                if active_sessions[sender_id].get("favorites_only", False)
+                "tracked items only"
+                if active_sessions[sender_id].get("tracked_only", False)
                 else "all stocks"
             )
             cleanup_session(sender_id)
@@ -664,6 +628,38 @@ def execute(sender_id, args, context):
             )
         else:
             send_message_func(sender_id, "⚠️ You don't have an active gagstock session.")
+        return
+
+    elif action == "on":
+        if sender_id in active_sessions:
+            current_mode = (
+                "tracked items only"
+                if active_sessions[sender_id].get("tracked_only", False)
+                else "all stocks"
+            )
+            send_message_func(
+                sender_id,
+                f"📡 You're already tracking ({current_mode}).\n"
+                "💡 Use 'gagstock off' to stop current tracking first.",
+            )
+            return
+
+        send_message_func(
+            sender_id,
+            "✅ Gagstock tracking started!\n"
+            "🔔 You'll be notified when stock or weather changes.\n\n"
+            "💡 For item-specific tracking, use: 'gagstock category/item_name'",
+        )
+
+        active_sessions[sender_id] = {
+            "timer": None,
+            "last_combined_key": None,
+            "last_message": "",
+            "tracked_only": False,
+        }
+
+        logger.info(f"Started full gagstock session for {sender_id}")
+        fetch_all_data(sender_id, send_message_func)
         return
 
     elif action == "stock":
@@ -708,9 +704,7 @@ def execute(sender_id, args, context):
 
                     message += "\n"
 
-                message += (
-                    "💡 Add to favorites: 'gagstock favorite add category/item_name'"
-                )
+                message += "💡 Track items: 'gagstock category/item_name'"
                 send_message_func(sender_id, message)
             else:
                 send_message_func(
@@ -747,18 +741,39 @@ def execute(sender_id, args, context):
 
             if stock_response.status_code == 200:
                 stock_data = stock_response.json()
-                item = find_item_by_fuzzy_name(item_name, stock_data)
 
-                if item:
-                    emoji_part = f"{item['emoji']} " if item["emoji"] else ""
-                    category_emoji = get_category_emoji(item["category"])
-                    send_message_func(
-                        sender_id,
-                        f"🔍 Found: {emoji_part}{item['display_name']}\n"
-                        f"{category_emoji} Category: {item['category'].title()}\n"
-                        f"💰 Value: {format_value(item['value'])}\n\n"
-                        f"💡 Add to favorites: 'gagstock favorite add {item['category']}/{item['display_name']}'",
-                    )
+                all_items = get_all_items_from_stock(stock_data)
+                item_name_lower = item_name.lower()
+                found_items = []
+
+                for item in all_items:
+                    if (
+                        item_name_lower in item["name"]
+                        or item["name"] in item_name_lower
+                    ):
+                        found_items.append(item)
+
+                if found_items:
+                    if len(found_items) == 1:
+                        item = found_items[0]
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        category_emoji = get_category_emoji(item["category"])
+                        send_message_func(
+                            sender_id,
+                            f"🔍 Found: {emoji_part}{item['display_name']}\n"
+                            f"{category_emoji} Category: {item['category'].title()}\n"
+                            f"💰 Value: {format_value(item['value'])}\n\n"
+                            f"💡 Track this item: 'gagstock {item['category']}/{item['display_name']}'",
+                        )
+                    else:
+                        message = f"🔍 Found {len(found_items)} items matching '{item_name}':\n\n"
+                        for item in found_items:
+                            emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                            category_emoji = get_category_emoji(item["category"])
+                            message += f"{category_emoji} {emoji_part}{item['display_name']} ({item['category']}) - {format_value(item['value'])}\n"
+
+                        message += f"\n💡 Track any item: 'gagstock category/item_name'"
+                        send_message_func(sender_id, message)
                 else:
                     send_message_func(
                         sender_id,
@@ -775,215 +790,94 @@ def execute(sender_id, args, context):
             send_message_func(sender_id, "❌ Error occurred while searching.")
         return
 
-    elif action == "favorite":
+    elif action == "add":
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "📌 Favorite Management Commands:\n\n"
-                "• 'gagstock favorite add category/item_name' - Add specific item\n"
-                "• 'gagstock favorite add item_name' - Add from current stock\n"
-                "• 'gagstock favorite remove [item_name]' - Remove from favorites\n"
-                "• 'gagstock favorite list' - Show your favorites\n"
-                "• 'gagstock favorite clear' - Clear all favorites\n\n"
+                "⚠️ Please specify items to track.\n\n"
+                "💡 Format Options:\n"
+                "   • 'gagstock add category/item_name'\n"
+                "   • 'gagstock add cat1/item1|cat2/item2'\n\n"
                 f"📋 Categories: {', '.join(get_available_categories())}\n\n"
-                "💡 Examples:\n"
-                "   • 'gagstock favorite add egg/legendary_egg'\n"
-                "   • 'gagstock favorite add ancient seed' (from current stock)",
+                "🔍 Examples:\n"
+                "   • 'gagstock add gear/ancient_shovel'\n"
+                "   • 'gagstock add egg/legendary|honey/royal_jelly'",
             )
             return
 
-        fav_action = args[1].lower()
-
-        if fav_action == "add":
-            if len(args) < 3:
-                send_message_func(
-                    sender_id,
-                    "⚠️ Please specify an item to add to favorites.\n\n"
-                    "💡 Format Options:\n"
-                    "   • 'gagstock favorite add category/item_name'\n"
-                    "   • 'gagstock favorite add item_name' (from current stock)\n\n"
-                    f"📋 Categories: {', '.join(get_available_categories())}\n\n"
-                    "🔍 Examples:\n"
-                    "   • 'gagstock favorite add gear/ancient_shovel'\n"
-                    "   • 'gagstock favorite add honey/royal_jelly'",
-                )
-                return
-
-            item_name = " ".join(args[2:])
-            try:
-                headers = {"User-Agent": "GagStock-Bot/1.0"}
-                stock_response = requests.get(
-                    "http://65.108.103.151:22377/api/stocks?type=all",
-                    timeout=15,
-                    headers=headers,
-                )
-
-                if stock_response.status_code == 200:
-                    stock_data = stock_response.json()
-                    success, message = add_favorite(sender_id, item_name, stock_data)
-                    send_message_func(sender_id, message)
-                else:
-                    send_message_func(
-                        sender_id,
-                        f"❌ Failed to fetch stock data. (Status: {stock_response.status_code})",
-                    )
-            except Exception as e:
-                logger.error(f"Error adding favorite: {e}")
-                send_message_func(sender_id, "❌ Error occurred while adding favorite.")
-            return
-
-        elif fav_action == "remove":
-            if len(args) < 3:
-                send_message_func(
-                    sender_id,
-                    "⚠️ Please specify an item name to remove from favorites.\n"
-                    "💡 Example: 'gagstock favorite remove ancient_shovel'",
-                )
-                return
-
-            item_name = " ".join(args[2:])
-            success, message = remove_favorite(sender_id, item_name)
-            send_message_func(sender_id, message)
-            return
-
-        elif fav_action == "list":
-            message = list_favorites(sender_id)
-            send_message_func(sender_id, message)
-            return
-
-        elif fav_action == "clear":
-            message = clear_favorites(sender_id)
-            send_message_func(sender_id, message)
-            return
-
-        else:
-            send_message_func(
-                sender_id,
-                "❌ Unknown favorite command.\n"
-                f"💡 Use: 'add', 'remove', 'list', or 'clear'",
-            )
+        items_string = " ".join(args[1:])
+        success, message = add_tracked_items(sender_id, items_string)
+        send_message_func(sender_id, message)
         return
 
-    elif action == "favorites":
+    elif action == "remove":
         if len(args) < 2:
             send_message_func(
                 sender_id,
-                "📌 Favorites Tracking Commands:\n\n"
-                "🔔 Tracking:\n"
-                "• 'gagstock favorites on' - Start tracking only favorite items\n"
-                "• 'gagstock favorites off' - Stop favorites tracking\n\n"
-                "⭐ Management:\n"
-                "• 'gagstock favorite add category/item_name' - Add to favorites\n"
-                "• 'gagstock favorite add item_name' - Add from current stock\n"
-                "• 'gagstock favorite remove [item_name]' - Remove from favorites\n"
-                "• 'gagstock favorite list' - Show your favorites\n"
-                "• 'gagstock favorite clear' - Clear all favorites\n\n"
-                f"📋 Categories: {', '.join(get_available_categories())}\n"
-                "💡 Example: 'gagstock favorite add cosmetic/rainbow_hat'",
+                "⚠️ Please specify an item to remove from tracking.\n"
+                "💡 Format: 'gagstock remove category/item_name'\n"
+                "📋 Example: 'gagstock remove gear/ancient_shovel'",
             )
             return
 
-        fav_action = args[1].lower()
-
-        if fav_action == "on":
-            if sender_id not in user_favorites or not user_favorites[sender_id]:
-                send_message_func(
-                    sender_id,
-                    "⚠️ You need to add some favorites first!\n\n"
-                    "💡 Use 'gagstock favorite add category/item_name' to add items to your favorites.\n"
-                    f"📋 Categories: {', '.join(get_available_categories())}\n\n"
-                    "🔍 Examples:\n"
-                    "   • 'gagstock favorite add gear/ancient_shovel'\n"
-                    "   • 'gagstock favorite add egg/legendary_egg'",
-                )
-                return
-
-            if sender_id in active_sessions:
-                current_mode = (
-                    "favorites"
-                    if active_sessions[sender_id].get("favorites_only", False)
-                    else "all stocks"
-                )
-                send_message_func(
-                    sender_id,
-                    f"📡 You're already tracking ({current_mode}).\n"
-                    "💡 Use 'gagstock off' to stop current tracking first.",
-                )
-                return
-
-            favorites_list = ", ".join(user_favorites[sender_id].keys())
-            send_message_func(
-                sender_id,
-                f"⭐ Favorites tracking started!\n"
-                f"🔔 You'll be notified when your favorite items are in stock.\n\n"
-                f"📋 Current favorites: {favorites_list}\n\n"
-                f"💡 Add more with: 'gagstock favorite add category/item_name'",
-            )
-
-            active_sessions[sender_id] = {
-                "timer": None,
-                "last_combined_key": None,
-                "last_message": "",
-                "favorites_only": True,
-            }
-
-            logger.info(f"Started favorites-only gagstock session for {sender_id}")
-            fetch_all_data(sender_id, send_message_func)
-            return
-
-        elif fav_action == "off":
-            if sender_id in active_sessions and active_sessions[sender_id].get(
-                "favorites_only", False
-            ):
-                cleanup_session(sender_id)
-                send_message_func(sender_id, "🛑 Favorites tracking stopped.")
-            else:
-                send_message_func(
-                    sender_id, "⚠️ You don't have an active favorites tracking session."
-                )
-            return
-
-        else:
-            send_message_func(
-                sender_id, "❌ Unknown favorites command.\n" "💡 Use 'on' or 'off'"
-            )
+        item_string = " ".join(args[1:])
+        success, message = remove_tracked_item(sender_id, item_string)
+        send_message_func(sender_id, message)
         return
 
-    elif action == "on":
-        if sender_id in active_sessions:
-            current_mode = (
-                "favorites"
-                if active_sessions[sender_id].get("favorites_only", False)
-                else "all stocks"
-            )
-            send_message_func(
-                sender_id,
-                f"📡 You're already tracking ({current_mode}).\n"
-                "💡 Use 'gagstock off' to stop current tracking first.",
-            )
-            return
+    elif action == "list":
+        message = list_tracked_items(sender_id)
+        send_message_func(sender_id, message)
+        return
 
-        send_message_func(
-            sender_id,
-            "✅ Gagstock tracking started!\n"
-            "🔔 You'll be notified when stock or weather changes.\n\n"
-            "💡 For favorites-only tracking, use: 'gagstock favorites on'",
-        )
-
-        active_sessions[sender_id] = {
-            "timer": None,
-            "last_combined_key": None,
-            "last_message": "",
-            "favorites_only": False,
-        }
-
-        logger.info(f"Started full gagstock session for {sender_id}")
-        fetch_all_data(sender_id, send_message_func)
+    elif action == "clear":
+        message = clear_tracked_items(sender_id)
+        send_message_func(sender_id, message)
         return
 
     else:
-        send_message_func(
-            sender_id,
-            f"❌ Unknown command: '{action}'\n"
-            "💡 Use 'gagstock' without arguments to see all available commands.",
-        )
+        if "/" in action:
+            items_string = " ".join(args)
+
+            if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+                success, message = add_tracked_items(sender_id, items_string)
+                if success:
+                    if sender_id in active_sessions:
+                        current_mode = (
+                            "tracked items only"
+                            if active_sessions[sender_id].get("tracked_only", False)
+                            else "all stocks"
+                        )
+                        send_message_func(
+                            sender_id,
+                            f"{message}\n\n📡 Currently tracking: {current_mode}\n"
+                            "💡 Use 'gagstock off' then start item-only tracking",
+                        )
+                    else:
+                        send_message_func(
+                            sender_id,
+                            f"{message}\n\n🔔 Starting item-specific tracking...",
+                        )
+
+                        active_sessions[sender_id] = {
+                            "timer": None,
+                            "last_combined_key": None,
+                            "last_message": "",
+                            "tracked_only": True,
+                        }
+
+                        logger.info(
+                            f"Started tracked-items-only gagstock session for {sender_id}"
+                        )
+                        fetch_all_data(sender_id, send_message_func)
+                else:
+                    send_message_func(sender_id, message)
+            else:
+                success, message = add_tracked_items(sender_id, items_string)
+                send_message_func(sender_id, message)
+        else:
+            send_message_func(
+                sender_id,
+                f"❌ Unknown command: '{action}'\n"
+                "💡 Use 'gagstock' without arguments to see all available commands.",
+            )
