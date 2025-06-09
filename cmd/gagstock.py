@@ -15,8 +15,33 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 active_sessions = {}
-last_sent_cache = {}
+user_tracked_items = {}
 PH_OFFSET = 8
+TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
+
+
+def load_tracked_items():
+    global user_tracked_items
+    try:
+        if os.path.exists(TRACKED_ITEMS_FILE):
+            with open(TRACKED_ITEMS_FILE, "rb") as f:
+                user_tracked_items = pickle.load(f)
+            logger.info(f"Loaded tracked items for {len(user_tracked_items)} users")
+        else:
+            user_tracked_items = {}
+            logger.info("No existing tracked items file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading tracked items: {e}")
+        user_tracked_items = {}
+
+
+def save_tracked_items_to_file():
+    try:
+        with open(TRACKED_ITEMS_FILE, "wb") as f:
+            pickle.dump(user_tracked_items, f)
+        logger.debug(f"Saved tracked items for {len(user_tracked_items)} users")
+    except Exception as e:
+        logger.error(f"Error saving tracked items: {e}")
 
 
 def pad(n):
@@ -93,7 +118,7 @@ def get_next_restocks():
         else:
             next_7 = now.replace(hour=next_7h_mark, minute=0, second=0, microsecond=0)
 
-        timers["cosmetics"] = get_countdown(next_7)
+        timers["cosmetic"] = get_countdown(next_7)
 
     except Exception as e:
         logger.error(f"Error calculating restocks: {e}")
@@ -102,7 +127,7 @@ def get_next_restocks():
             "gear": "Error",
             "seed": "Error",
             "honey": "Error",
-            "cosmetics": "Error",
+            "cosmetic": "Error",
         }
 
     return timers
@@ -121,76 +146,271 @@ def format_value(val):
         return f"x{val}"
 
 
-def add_emoji(name):
-    emojis = {
-        "Common Egg": "🥚",
-        "Uncommon Egg": "🐣",
-        "Rare Egg": "🍳",
-        "Legendary Egg": "🪺",
-        "Mythical Egg": "🥚",
-        "Bug Egg": "🪲",
-        "Watering Can": "🚿",
-        "Trowel": "🛠️",
-        "Recall Wrench": "🔧",
-        "Basic Sprinkler": "💧",
-        "Advanced Sprinkler": "💦",
-        "Godly Sprinkler": "⛲",
-        "Lightning Rod": "⚡",
-        "Master Sprinkler": "🌊",
-        "Favorite Tool": "❤️",
-        "Harvest Tool": "🌾",
-        "Carrot": "🥕",
-        "Strawberry": "🍓",
-        "Blueberry": "🫐",
-        "Orange Tulip": "🌷",
-        "Tomato": "🍅",
-        "Corn": "🌽",
-        "Daffodil": "🌼",
-        "Watermelon": "🍉",
-        "Pumpkin": "🎃",
-        "Apple": "🍎",
-        "Bamboo": "🎍",
-        "Coconut": "🥥",
-        "Cactus": "🌵",
-        "Dragon Fruit": "🍈",
-        "Mango": "🥭",
-        "Grape": "🍇",
-        "Mushroom": "🍄",
-        "Pepper": "🌶️",
-        "Cacao": "🍫",
-        "Beanstalk": "🌱",
+def format_list(arr):
+    if not arr:
+        return "None."
+
+    result = []
+    for item in arr:
+        try:
+            emoji = item.get("emoji", "")
+            name = item.get("name", "Unknown")
+            value = item.get("value", 0)
+            emoji_part = f"{emoji} " if emoji else ""
+            result.append(f"- {emoji_part}{name}: {format_value(value)}")
+        except Exception as e:
+            logger.warning(f"Error formatting item {item}: {e}")
+            continue
+
+    return "\n".join(result) if result else "None."
+
+
+def get_available_categories():
+    return ["gear", "seed", "egg", "honey", "cosmetic"]
+
+
+def get_category_emoji(category):
+    category_emojis = {
+        "gear": "🛠️",
+        "seed": "🌱",
+        "egg": "🥚",
+        "honey": "🍯",
+        "cosmetic": "🎨",
     }
-    emoji = emojis.get(name, "")
-    return f"{emoji} {name}" if emoji else name
+    return category_emojis.get(category, "📦")
 
 
-def normalize_stock_data(stock_data):
-    def transform(arr):
-        return [{"name": item["name"], "value": item["value"]} for item in arr]
-
-    return {
-        "gearStock": transform(stock_data.get("gear", [])),
-        "seedsStock": transform(stock_data.get("seed", [])),
-        "eggStock": transform(stock_data.get("egg", [])),
-        "honeyStock": transform(stock_data.get("honey", [])),
-        "cosmeticsStock": transform(stock_data.get("cosmetic", [])),
+def get_all_items_from_stock(stock_data):
+    all_items = []
+    categories = {
+        "gear": stock_data.get("gear", []),
+        "seed": stock_data.get("seed", []),
+        "egg": stock_data.get("egg", []),
+        "honey": stock_data.get("honey", []),
+        "cosmetic": stock_data.get("costmetic", []),
     }
 
+    for category, items in categories.items():
+        for item in items:
+            all_items.append(
+                {
+                    "name": item.get("name", "").lower(),
+                    "display_name": item.get("name", "Unknown"),
+                    "emoji": item.get("emoji", ""),
+                    "value": item.get("value", 0),
+                    "category": category,
+                }
+            )
 
-def format_weather_data(weather_data):
-    active_weathers = []
+    return all_items
 
-    for weather_type, data in weather_data.items():
-        if data.get("active", False):
-            active_weathers.append(f"{weather_type.title()}: Active")
+
+def normalize_item_name(name):
+    return name.lower().strip().replace("_", " ").replace("-", " ")
+
+
+def parse_tracked_items(items_string):
+    items = []
+    if "|" in items_string:
+        parts = items_string.split("|")
+    else:
+        parts = [items_string]
+
+    for part in parts:
+        part = part.strip()
+        if "/" in part:
+            category, item_name = part.split("/", 1)
+            category = category.lower().strip()
+            item_name = item_name.strip()
+
+            if category in get_available_categories():
+                items.append({"category": category, "item_name": item_name})
+
+    return items
+
+
+def save_tracked_items(sender_id, items):
+    global user_tracked_items
+
+    if sender_id not in user_tracked_items:
+        user_tracked_items[sender_id] = []
+
+    added_count = 0
+    for item in items:
+        existing_item = next(
+            (
+                x
+                for x in user_tracked_items[sender_id]
+                if x["category"] == item["category"]
+                and normalize_item_name(x["item_name"])
+                == normalize_item_name(item["item_name"])
+            ),
+            None,
+        )
+
+        if not existing_item:
+            user_tracked_items[sender_id].append(item)
+            added_count += 1
+            logger.info(
+                f"Added tracked item for {sender_id}: {item['category']}/{item['item_name']}"
+            )
+
+    save_tracked_items_to_file()
+    return added_count
+
+
+def add_tracked_items(sender_id, items_string):
+    items = parse_tracked_items(items_string)
+
+    if not items:
+        return (
+            False,
+            "❌ Invalid format. Use: category/item_name or category/item1|category/item2",
+        )
+
+    valid_items = []
+    invalid_categories = []
+    duplicate_items = []
+
+    if sender_id not in user_tracked_items:
+        user_tracked_items[sender_id] = []
+
+    for item in items:
+        if item["category"] not in get_available_categories():
+            invalid_categories.append(item["category"])
         else:
-            active_weathers.append(f"{weather_type.title()}: Inactive")
+            existing_item = next(
+                (
+                    x
+                    for x in user_tracked_items[sender_id]
+                    if x["category"] == item["category"]
+                    and normalize_item_name(x["item_name"])
+                    == normalize_item_name(item["item_name"])
+                ),
+                None,
+            )
 
-    if not active_weathers:
-        return "🌤️ Weather: No active weather events"
+            if existing_item:
+                duplicate_items.append(f"{item['category']}/{item['item_name']}")
+            else:
+                valid_items.append(item)
 
-    weather_status = " | ".join(active_weathers)
-    return f"🌤️ Weather: {weather_status}"
+    if invalid_categories:
+        return (
+            False,
+            f"❌ Invalid categories: {', '.join(invalid_categories)}\n📋 Valid categories: {', '.join(get_available_categories())}",
+        )
+
+    if not valid_items and duplicate_items:
+        return False, f"❌ Items already tracked: {', '.join(duplicate_items)}"
+
+    added_count = save_tracked_items(sender_id, valid_items)
+
+    message_parts = []
+
+    if added_count > 0:
+        if added_count == 1:
+            item = valid_items[0]
+            category_emoji = get_category_emoji(item["category"])
+            message_parts.append(
+                f"✅ Added '{item['item_name']}' to favorites list!\n{category_emoji} Category: {item['category'].title()}"
+            )
+        else:
+            message_parts.append(f"✅ Added {added_count} items to favorites list:")
+            for item in valid_items:
+                category_emoji = get_category_emoji(item["category"])
+                message_parts.append(
+                    f"{category_emoji} {item['category']}/{item['item_name']}"
+                )
+
+        message_parts.append(
+            "🔔 Use 'gagstockfav on' to get notified when these items are in stock."
+        )
+
+    if duplicate_items:
+        message_parts.append(f"⚠️ Already tracking: {', '.join(duplicate_items)}")
+
+    return True, "\n".join(message_parts)
+
+
+def remove_tracked_item(sender_id, item_string):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return False, "❌ You don't have any favorite items to remove."
+
+    if "/" not in item_string:
+        return False, "❌ Please use format: category/item_name"
+
+    category, item_name = item_string.split("/", 1)
+    category = category.lower().strip()
+    item_name = item_name.strip()
+
+    item_name_normalized = normalize_item_name(item_name)
+
+    for i, tracked_item in enumerate(user_tracked_items[sender_id]):
+        if (
+            tracked_item["category"] == category
+            and normalize_item_name(tracked_item["item_name"]) == item_name_normalized
+        ):
+            removed_item = user_tracked_items[sender_id].pop(i)
+            save_tracked_items_to_file()
+            logger.info(
+                f"Removed tracked item for {sender_id}: {removed_item['category']}/{removed_item['item_name']}"
+            )
+            return (
+                True,
+                f"✅ Removed '{removed_item['category']}/{removed_item['item_name']}' from favorites list.",
+            )
+
+    return False, f"❌ '{category}/{item_name}' not found in your favorites list."
+
+
+def list_tracked_items(sender_id):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return (
+            "❌ You don't have any favorite items.\n"
+            "💡 Add items with: 'gagstock category/item_name'\n"
+            f"📋 Categories: {', '.join(get_available_categories())}"
+        )
+
+    tracked_by_category = {}
+    for item in user_tracked_items[sender_id]:
+        category = item["category"]
+        if category not in tracked_by_category:
+            tracked_by_category[category] = []
+        tracked_by_category[category].append(item["item_name"])
+
+    message = "⭐ Your Favorite Items:\n\n"
+
+    for category in get_available_categories():
+        if category in tracked_by_category:
+            emoji = get_category_emoji(category)
+            message += f"{emoji} {category.title()}:\n"
+            for item in tracked_by_category[category]:
+                message += f"   • {item}\n"
+            message += "\n"
+
+    session_status = ""
+    if sender_id in active_sessions:
+        session_status = f"📡 Gagstock: ON (all stocks)\n"
+    else:
+        session_status = "📴 Gagstock: OFF\n"
+
+    message += f"📊 Total: {len(user_tracked_items[sender_id])} favorite item(s)\n"
+    message += session_status
+    message += "💡 Remove with: 'gagstock remove category/item_name'\n"
+    message += "💡 Track favorites: 'gagstockfav on'"
+    return message
+
+
+def clear_tracked_items(sender_id):
+    if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+        return "❌ You don't have any favorite items to clear."
+
+    count = len(user_tracked_items[sender_id])
+    user_tracked_items[sender_id] = []
+    save_tracked_items_to_file()
+    logger.info(f"Cleared {count} tracked items for {sender_id}")
+    return f"✅ Cleared {count} favorite item(s) successfully."
 
 
 def cleanup_session(sender_id):
@@ -200,217 +420,430 @@ def cleanup_session(sender_id):
         if timer:
             timer.cancel()
         del active_sessions[sender_id]
-        if sender_id in last_sent_cache:
-            del last_sent_cache[sender_id]
         logger.info(f"Cleaned up gagstock session for {sender_id}")
 
 
-def fetch_with_timeout(url, timeout=9):
-    try:
-        headers = {"User-Agent": "GagStock-Bot/1.0"}
-        response = requests.get(url, timeout=timeout, headers=headers)
-        response.raise_for_status()
-        return response
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request failed for {url}: {e}")
-        raise
-
-
-def fetch_and_notify(sender_id, send_message_func, filters=None):
+def fetch_all_data(sender_id, send_message_func):
     if sender_id not in active_sessions:
-        logger.info(f"Session {sender_id} no longer active, stopping fetch_and_notify")
-        return False
+        logger.info(f"Session {sender_id} no longer active, stopping fetch_all_data")
+        return
 
     try:
         logger.debug(f"Fetching data for gagstock session {sender_id}")
 
+        headers = {"User-Agent": "GagStock-Bot/1.0"}
+
         try:
-            stock_response = fetch_with_timeout(
-                "https://vmi2625091.contaboserver.net/api/stocks"
+            stock_response = requests.get(
+                "https://vmi2625091.contaboserver.net/api/stocks",
+                timeout=15,
+                headers=headers,
             )
-            weather_response = fetch_with_timeout(
-                "https://vmi2625091.contaboserver.net/api/weather"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Stock API request failed: {e}")
+            raise
+
+        try:
+            weather_response = requests.get(
+                "https://growagardenstock.com/api/stock/weather",
+                timeout=15,
+                headers=headers,
             )
-        except requests.exceptions.RequestException:
-            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Weather API request failed: {e}")
+            raise
+
+        if stock_response.status_code != 200:
+            logger.error(
+                f"Stock API error: {stock_response.status_code} - {stock_response.text}"
+            )
+            raise requests.RequestException(
+                f"Stock API returned {stock_response.status_code}"
+            )
+
+        if weather_response.status_code != 200:
+            logger.error(
+                f"Weather API error: {weather_response.status_code} - {weather_response.text}"
+            )
+            raise requests.RequestException(
+                f"Weather API returned {weather_response.status_code}"
+            )
 
         try:
             stock_data = stock_response.json()
-            weather_data = weather_response.json()
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON: {e}")
-            return False
-
-        normalized = normalize_stock_data(stock_data)
-        current_stock_only = {
-            "gear": normalized["gearStock"],
-            "seeds": normalized["seedsStock"],
-            "egg": normalized["eggStock"],
-            "honey": normalized["honeyStock"],
-            "cosmetics": normalized["cosmeticsStock"],
-        }
-
-        current_key = json.dumps(current_stock_only, sort_keys=True)
-        last_sent = last_sent_cache.get(sender_id)
-
-        if last_sent == current_key:
-            return False
-
-        last_sent_cache[sender_id] = current_key
-
-        restocks = get_next_restocks()
-        updated_at_ph = get_ph_time().strftime("%I:%M:%S %p, %d %b %Y")
-
-        def format_list(arr):
-            return "\n".join(
-                [
-                    f"- {add_emoji(item['name'])}: {format_value(item['value'])}"
-                    for item in arr
-                ]
-            )
-
-        weather_details = format_weather_data(weather_data)
-        weather_details += f"\n📅 Updated at (Philippines): {updated_at_ph}"
-
-        categories = [
-            {
-                "label": "🛠️ 𝗚𝗲𝗮𝗿",
-                "items": stock_data.get("gear", []),
-                "restock": restocks["gear"],
-            },
-            {
-                "label": "🌱 𝗦𝗲𝗲𝗱𝘀",
-                "items": stock_data.get("seed", []),
-                "restock": restocks["seed"],
-            },
-            {
-                "label": "🥚 𝗘𝗴𝗴𝘀",
-                "items": stock_data.get("egg", []),
-                "restock": restocks["egg"],
-            },
-            {
-                "label": "🎨 𝗖𝗼𝘀𝗺𝗲𝘁𝗶𝗰𝘀",
-                "items": stock_data.get("cosmetic", []),
-                "restock": restocks["cosmetics"],
-            },
-            {
-                "label": "🍯 𝗛𝗼𝗻𝗲𝘆",
-                "items": stock_data.get("honey", []),
-                "restock": restocks["honey"],
-            },
-        ]
-
-        filtered_content = ""
-        for category in categories:
-            label, items, restock = (
-                category["label"],
-                category["items"],
-                category["restock"],
-            )
-
-            if filters:
-                filtered_items = [
-                    item
-                    for item in items
-                    if any(f.lower() in item["name"].lower() for f in filters)
-                ]
-            else:
-                filtered_items = items
-
-            if filtered_items:
-                filtered_content += f"{label}:\n{format_list(filtered_items)}\n⏳ Restock in: {restock}\n\n"
-
-        if not filtered_content.strip():
-            return False
-
-        message = f"🌾 𝗚𝗿𝗼𝘄 𝗔 𝗚𝗮𝗿𝗱𝗲𝗻 — 𝗧𝗿𝗮𝗰𝗸𝗲𝗿\n\n{filtered_content}{weather_details}"
+            logger.error(f"Failed to parse stock data JSON: {e}")
+            raise
 
         try:
-            send_message_func(sender_id, message)
-            logger.info(f"Sent gagstock update to {sender_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send message to {sender_id}: {e}")
-            return False
+            weather_data = weather_response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse weather data JSON: {e}")
+            raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error in gagstock for {sender_id}: {e}")
-        return False
+        combined_key = json.dumps(
+            {
+                "gear": stock_data.get("gear", []),
+                "seed": stock_data.get("seed", []),
+                "egg": stock_data.get("egg", []),
+                "honey": stock_data.get("honey", []),
+                "cosmetic": stock_data.get("cosmetic", []),
+                "weatherUpdatedAt": weather_data.get("updatedAt", ""),
+                "weatherCurrent": weather_data.get("currentWeather", ""),
+            },
+            sort_keys=True,
+        )
 
+        session = active_sessions.get(sender_id)
+        if not session:
+            logger.info(f"Session {sender_id} was removed during fetch")
+            return
 
-def schedule_next_fetch(sender_id, send_message_func, filters=None):
-    if sender_id not in active_sessions:
-        return
+        if combined_key == session.get("last_combined_key"):
+            logger.debug(f"No changes detected for {sender_id}, scheduling next check")
+        else:
+            logger.info(f"Data changed for {sender_id}, sending update")
+            session["last_combined_key"] = combined_key
 
-    now = get_ph_time()
-    next_time = now.replace(second=30, microsecond=0)
-    mins = now.minute
-    next_min = mins - (mins % 5) + 5
-    next_time = next_time.replace(minute=next_min)
+            restocks = get_next_restocks()
 
-    if next_time <= now:
-        next_time = next_time + timedelta(minutes=5)
+            gear_list = format_list(stock_data.get("gear", []))
+            seed_list = format_list(stock_data.get("seed", []))
+            egg_list = format_list(stock_data.get("egg", []))
+            cosmetic_list = format_list(stock_data.get("cosmetic", []))
+            honey_list = format_list(stock_data.get("honey", []))
 
-    timeout = (next_time - now).total_seconds()
+            weather_icon = weather_data.get("icon", "🌦️")
+            weather_current = weather_data.get("currentWeather", "Unknown")
+            weather_description = weather_data.get("description", "No description")
+            weather_effect = weather_data.get("effectDescription", "No effect")
+            weather_bonus = weather_data.get("cropBonuses", "No bonus")
+            weather_visual = weather_data.get("visualCue", "No visual cue")
+            weather_rarity = weather_data.get("rarity", "Unknown")
 
-    def run_and_schedule():
+            weather_details = (
+                f"🌤️ Weather: {weather_icon} {weather_current}\n"
+                f"📖 Description: {weather_description}\n"
+                f"📌 Effect: {weather_effect}\n"
+                f"🪄 Crop Bonus: {weather_bonus}\n"
+                f"📢 Visual Cue: {weather_visual}\n"
+                f"🌟 Rarity: {weather_rarity}"
+            )
+
+            message = (
+                f"🌾 Grow A Garden — Full Stock Tracker\n\n"
+                f"🛠️ Gear:\n{gear_list}\n⏳ Restock in: {restocks['gear']}\n\n"
+                f"🌱 Seeds:\n{seed_list}\n⏳ Restock in: {restocks['seed']}\n\n"
+                f"🥚 Eggs:\n{egg_list}\n⏳ Restock in: {restocks['egg']}\n\n"
+                f"🎨 Cosmetic:\n{cosmetic_list}\n⏳ Restock in: {restocks['cosmetic']}\n\n"
+                f"🍯 Honey:\n{honey_list}\n⏳ Restock in: {restocks['honey']}\n\n"
+                f"{weather_details}"
+            )
+
+            if message != session.get("last_message"):
+                session["last_message"] = message
+                try:
+                    send_message_func(sender_id, message)
+                    logger.info(f"Sent gagstock update to {sender_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send message to {sender_id}: {e}")
+
         if sender_id in active_sessions:
-            fetch_and_notify(sender_id, send_message_func, filters)
-            timer = threading.Timer(300.0, run_and_schedule)
+            timer = threading.Timer(
+                10.0, fetch_all_data, args=[sender_id, send_message_func]
+            )
+            timer.daemon = True
+            timer.start()
+            active_sessions[sender_id]["timer"] = timer
+            logger.debug(f"Scheduled next fetch for {sender_id} in 10 seconds")
+
+    except requests.Timeout:
+        logger.error(f"Timeout fetching data for {sender_id}")
+        if sender_id in active_sessions:
+            timer = threading.Timer(
+                30.0, fetch_all_data, args=[sender_id, send_message_func]
+            )
             timer.daemon = True
             timer.start()
             active_sessions[sender_id]["timer"] = timer
 
-    timer = threading.Timer(timeout, run_and_schedule)
-    timer.daemon = True
-    timer.start()
-    active_sessions[sender_id] = {"timer": timer}
+    except requests.RequestException as e:
+        logger.error(f"Network error in gagstock for {sender_id}: {e}")
+        if sender_id in active_sessions:
+            try:
+                send_message_func(
+                    sender_id,
+                    "⚠️ Stock API temporarily unavailable\nRetrying in 30 seconds...",
+                )
+            except:
+                pass
+            timer = threading.Timer(
+                30.0, fetch_all_data, args=[sender_id, send_message_func]
+            )
+            timer.daemon = True
+            timer.start()
+            active_sessions[sender_id]["timer"] = timer
+
+    except Exception as e:
+        logger.error(f"Unexpected error in gagstock for {sender_id}: {e}")
+        if sender_id in active_sessions:
+            try:
+                send_message_func(
+                    sender_id,
+                    "❌ Unexpected error occurred\nStopping tracker. Use 'gagstock on' to restart.",
+                )
+            except:
+                pass
+        cleanup_session(sender_id)
 
 
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
+    load_tracked_items()
+
     if not args:
         send_message_func(
             sender_id,
-            "📌 Usage:\n• gagstock on\n• gagstock on Sunflower | Watering Can\n• gagstock off",
+            "📌 Gagstock Commands:\n\n"
+            "📊 Full Stock Tracking:\n"
+            "• 'gagstock on' - Track ALL stock changes\n"
+            "• 'gagstock off' - Stop full stock tracking\n\n"
+            "⭐ Favorites Management:\n"
+            "• 'gagstock category/item_name' - Add item to favorites\n"
+            "• 'gagstock cat1/item1|cat2/item2' - Add multiple items\n"
+            "• 'gagstock add category/item_name' - Add item to favorites\n"
+            "• 'gagstock remove category/item_name' - Remove from favorites\n"
+            "• 'gagstock list' - Show your favorite items\n"
+            "• 'gagstock clear' - Clear all favorite items\n\n"
+            "🔍 Stock Information:\n"
+            "• 'gagstock stock' - Show current stock by category\n"
+            "• 'gagstock search [item_name]' - Search for items\n\n"
+            f"📋 Categories: {', '.join(get_available_categories())}\n"
+            "💡 Examples:\n"
+            "   • 'gagstock gear/ancient_shovel' (adds to favorites)\n"
+            "   • 'gagstock on' (tracks ALL items)\n"
+            "   • 'gagstockfav on' (tracks only your favorites)",
         )
         return
 
     action = args[0].lower()
-    filters = None
-
-    if len(args) > 1:
-        filter_string = " ".join(args[1:])
-        filters = [f.strip() for f in filter_string.split("|") if f.strip()]
 
     if action == "off":
         if sender_id in active_sessions:
             cleanup_session(sender_id)
-            send_message_func(sender_id, "🛑 Gagstock tracking stopped.")
+            send_message_func(sender_id, "🛑 Gagstock tracking stopped (all stocks).")
         else:
             send_message_func(sender_id, "⚠️ You don't have an active gagstock session.")
         return
 
-    if action != "on":
+    elif action == "on":
+        if sender_id in active_sessions:
+            send_message_func(
+                sender_id,
+                "📡 Gagstock is already tracking all stocks!\n"
+                "💡 Use 'gagstock off' to stop first.",
+            )
+            return
+
         send_message_func(
             sender_id,
-            "📌 Usage:\n• gagstock on\n• gagstock on Sunflower | Watering Can\n• gagstock off",
+            "✅ Gagstock started! Tracking ALL stock changes.\n"
+            "🔔 You'll be notified when any stock or weather changes.\n\n"
+            "💡 For favorites-only tracking, use: 'gagstockfav on'",
         )
+
+        active_sessions[sender_id] = {
+            "timer": None,
+            "last_combined_key": None,
+            "last_message": "",
+        }
+
+        logger.info(f"Started full gagstock session for {sender_id}")
+        fetch_all_data(sender_id, send_message_func)
         return
 
-    if sender_id in active_sessions:
-        send_message_func(
-            sender_id, "📡 You're already tracking Gagstock. Use gagstock off to stop."
-        )
+    elif action == "stock":
+        try:
+            headers = {"User-Agent": "GagStock-Bot/1.0"}
+            stock_response = requests.get(
+                "http://65.108.103.151:22377/api/stocks?type=all",
+                timeout=15,
+                headers=headers,
+            )
+
+            if stock_response.status_code == 200:
+                stock_data = stock_response.json()
+                restocks = get_next_restocks()
+
+                categories = {
+                    "gear": stock_data.get("gearStock", []),
+                    "seed": stock_data.get("seedsStock", []),
+                    "egg": stock_data.get("eggStock", []),
+                    "honey": stock_data.get("honeyStock", []),
+                    "cosmetic": stock_data.get("cosmeticStock", []),
+                }
+
+                message = "📦 Current Stock:\n\n"
+
+                for category, items in categories.items():
+                    emoji = get_category_emoji(category)
+                    restock_time = restocks.get(category, "Unknown")
+
+                    message += f"{emoji} {category.title()} (⏳ {restock_time}):\n"
+
+                    if items:
+                        for item in items:
+                            emoji_part = (
+                                f"{item.get('emoji', '')} " if item.get("emoji") else ""
+                            )
+                            name = item.get("name", "Unknown")
+                            value = format_value(item.get("value", 0))
+                            message += f"   • {emoji_part}{name}: {value}\n"
+                    else:
+                        message += "   • No items in stock\n"
+
+                    message += "\n"
+
+                message += "💡 Add to favorites: 'gagstock category/item_name'"
+                send_message_func(sender_id, message)
+            else:
+                send_message_func(
+                    sender_id,
+                    f"❌ Failed to fetch current stock data. (Status: {stock_response.status_code})",
+                )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching stock data: {e}")
+            send_message_func(
+                sender_id,
+                "❌ Network error occurred while fetching stock data. Please try again later.",
+            )
+        except Exception as e:
+            logger.error(f"Error fetching stock data: {e}")
+            send_message_func(sender_id, "❌ Error occurred while fetching stock data.")
         return
 
-    send_message_func(
-        sender_id,
-        "✅ Gagstock tracking started! You'll be notified when stock or weather changes.",
-    )
+    elif action == "search":
+        if len(args) < 2:
+            send_message_func(
+                sender_id,
+                "⚠️ Please specify an item name to search for.\n💡 Example: 'gagstock search ancient shovel'",
+            )
+            return
 
-    logger.info(f"Started gagstock session for {sender_id}")
+        item_name = " ".join(args[1:])
+        try:
+            headers = {"User-Agent": "GagStock-Bot/1.0"}
+            stock_response = requests.get(
+                "http://65.108.103.151:22377/api/stocks?type=all",
+                timeout=15,
+                headers=headers,
+            )
 
-    fetch_and_notify(sender_id, send_message_func, filters)
-    schedule_next_fetch(sender_id, send_message_func, filters)
+            if stock_response.status_code == 200:
+                stock_data = stock_response.json()
+
+                all_items = get_all_items_from_stock(stock_data)
+                item_name_lower = item_name.lower()
+                found_items = []
+
+                for item in all_items:
+                    if (
+                        item_name_lower in item["name"]
+                        or item["name"] in item_name_lower
+                    ):
+                        found_items.append(item)
+
+                if found_items:
+                    if len(found_items) == 1:
+                        item = found_items[0]
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        category_emoji = get_category_emoji(item["category"])
+                        send_message_func(
+                            sender_id,
+                            f"🔍 Found: {emoji_part}{item['display_name']}\n"
+                            f"{category_emoji} Category: {item['category'].title()}\n"
+                            f"💰 Value: {format_value(item['value'])}\n\n"
+                            f"💡 Add to favorites: 'gagstock {item['category']}/{item['display_name']}'",
+                        )
+                    else:
+                        message = f"🔍 Found {len(found_items)} items matching '{item_name}':\n\n"
+                        for item in found_items:
+                            emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                            category_emoji = get_category_emoji(item["category"])
+                            message += f"{category_emoji} {emoji_part}{item['display_name']} ({item['category']}) - {format_value(item['value'])}\n"
+
+                        message += f"\n💡 Add any item: 'gagstock category/item_name'"
+                        send_message_func(sender_id, message)
+                else:
+                    send_message_func(
+                        sender_id,
+                        f"❌ Item '{item_name}' not found in current stock.\n"
+                        f"💡 Try a different spelling or check 'gagstock stock' for available items.",
+                    )
+            else:
+                send_message_func(
+                    sender_id,
+                    f"❌ Failed to fetch stock data for search. (Status: {stock_response.status_code})",
+                )
+        except Exception as e:
+            logger.error(f"Error searching for item: {e}")
+            send_message_func(sender_id, "❌ Error occurred while searching.")
+        return
+
+    elif action == "add":
+        if len(args) < 2:
+            send_message_func(
+                sender_id,
+                "⚠️ Please specify items to add to favorites.\n\n"
+                "💡 Format Options:\n"
+                "   • 'gagstock add category/item_name'\n"
+                "   • 'gagstock add cat1/item1|cat2/item2'\n\n"
+                f"📋 Categories: {', '.join(get_available_categories())}\n\n"
+                "🔍 Examples:\n"
+                "   • 'gagstock add gear/ancient_shovel'\n"
+                "   • 'gagstock add egg/legendary|honey/royal_jelly'",
+            )
+            return
+
+        items_string = " ".join(args[1:])
+        success, message = add_tracked_items(sender_id, items_string)
+        send_message_func(sender_id, message)
+        return
+
+    elif action == "remove":
+        if len(args) < 2:
+            send_message_func(
+                sender_id,
+                "⚠️ Please specify an item to remove from favorites.\n"
+                "💡 Format: 'gagstock remove category/item_name'\n"
+                "📋 Example: 'gagstock remove gear/ancient_shovel'",
+            )
+            return
+
+        item_string = " ".join(args[1:])
+        success, message = remove_tracked_item(sender_id, item_string)
+        send_message_func(sender_id, message)
+        return
+
+    elif action == "list":
+        message = list_tracked_items(sender_id)
+        send_message_func(sender_id, message)
+        return
+
+    elif action == "clear":
+        message = clear_tracked_items(sender_id)
+        send_message_func(sender_id, message)
+        return
+
+    else:
+        if "/" in action:
+            items_string = " ".join(args)
+            success, message = add_tracked_items(sender_id, items_string)
+            send_message_func(sender_id, message)
+        else:
+            send_message_func(
+                sender_id,
+                f"❌ Unknown command: '{action}'\n"
+                "💡 Use 'gagstock' without arguments to see all available commands.",
+            )
