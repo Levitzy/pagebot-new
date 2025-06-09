@@ -169,11 +169,11 @@ def normalize_stock_data(stock_data):
         return [{"name": item["name"], "value": item["value"]} for item in arr]
 
     return {
-        "gearStock": transform(stock_data.get("gearStock", [])),
-        "seedsStock": transform(stock_data.get("seedsStock", [])),
-        "eggStock": transform(stock_data.get("eggStock", [])),
-        "honeyStock": transform(stock_data.get("honeyStock", [])),
-        "cosmeticsStock": transform(stock_data.get("cosmeticsStock", [])),
+        "gearStock": transform(stock_data.get("gear", [])),
+        "seedsStock": transform(stock_data.get("seed", [])),
+        "eggStock": transform(stock_data.get("egg", [])),
+        "honeyStock": transform(stock_data.get("honey", [])),
+        "cosmeticsStock": transform(stock_data.get("cosmetic", [])),
     }
 
 
@@ -275,27 +275,27 @@ def fetch_and_notify(sender_id, send_message_func, filters=None):
         categories = [
             {
                 "label": "🛠️ 𝗚𝗲𝗮𝗿",
-                "items": stock_data.get("gearStock", []),
+                "items": stock_data.get("gear", []),
                 "restock": restocks["gear"],
             },
             {
                 "label": "🌱 𝗦𝗲𝗲𝗱𝘀",
-                "items": stock_data.get("seedsStock", []),
+                "items": stock_data.get("seed", []),
                 "restock": restocks["seed"],
             },
             {
                 "label": "🥚 𝗘𝗴𝗴𝘀",
-                "items": stock_data.get("eggStock", []),
+                "items": stock_data.get("egg", []),
                 "restock": restocks["egg"],
             },
             {
                 "label": "🎨 𝗖𝗼𝘀𝗺𝗲𝘁𝗶𝗰𝘀",
-                "items": stock_data.get("cosmeticsStock", []),
+                "items": stock_data.get("cosmetic", []),
                 "restock": restocks["cosmetics"],
             },
             {
                 "label": "🍯 𝗛𝗼𝗻𝗲𝘆",
-                "items": stock_data.get("honeyStock", []),
+                "items": stock_data.get("honey", []),
                 "restock": restocks["honey"],
             },
         ]
