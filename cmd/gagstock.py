@@ -53,15 +53,17 @@ def load_all_data():
                     globals()[var_name] = data
                 logger.info(f"Loaded {var_name} from {file_path}")
             else:
-                globals()[var_name] = (
-                    {} if var_name != "price_history" else defaultdict(list)
-                )
+                if var_name == "price_history":
+                    globals()[var_name] = defaultdict(list)
+                else:
+                    globals()[var_name] = {}
                 logger.info(f"No existing {file_path} found, starting fresh")
         except Exception as e:
             logger.error(f"Error loading {file_path}: {e}")
-            globals()[var_name] = (
-                {} if var_name != "price_history" else defaultdict(list)
-            )
+            if var_name == "price_history":
+                globals()[var_name] = defaultdict(list)
+            else:
+                globals()[var_name] = {}
 
 
 def save_data(data_type):
@@ -315,6 +317,7 @@ def update_user_stats(sender_id, action):
 
 
 def get_user_preferences(sender_id):
+    global user_preferences
     if sender_id not in user_preferences:
         user_preferences[sender_id] = {
             "notifications": True,
@@ -328,8 +331,10 @@ def get_user_preferences(sender_id):
 
 
 def set_user_preference(sender_id, key, value):
+    global user_preferences
     prefs = get_user_preferences(sender_id)
     prefs[key] = value
+    user_preferences[sender_id] = prefs
     save_data("preferences")
 
 
@@ -933,65 +938,108 @@ def execute(sender_id, args, context):
         return
 
     elif action == "compact":
-        prefs = get_user_preferences(sender_id)
-        prefs["compact_mode"] = not prefs["compact_mode"]
-        save_data("preferences")
+        try:
+            load_all_data()
+            prefs = get_user_preferences(sender_id)
+            prefs["compact_mode"] = not prefs["compact_mode"]
+            user_preferences[sender_id] = prefs
+            save_data("preferences")
 
-        mode = "Compact" if prefs["compact_mode"] else "Detailed"
-        send_message_func(
-            sender_id,
-            f"⚙️ Display mode switched to: {mode}\n"
-            "💡 This affects how stock updates are shown when tracking is active.",
-        )
+            mode = "Compact" if prefs["compact_mode"] else "Detailed"
+            send_message_func(
+                sender_id,
+                f"⚙️ Display mode switched to: {mode}\n"
+                "💡 This affects how stock updates are shown when tracking is active.",
+            )
+        except Exception as e:
+            logger.error(f"Error in compact command for {sender_id}: {e}")
+            send_message_func(
+                sender_id,
+                "❌ Error occurred while changing display mode. Please try again.",
+            )
         return
 
     elif action == "settings":
-        prefs = get_user_preferences(sender_id)
-        send_message_func(
-            sender_id,
-            "⚙️ Your Gagstock Settings:\n\n"
-            f"📊 Compact mode: {'ON' if prefs['compact_mode'] else 'OFF'}\n"
-            f"🎯 Show rarity: {'ON' if prefs['show_rarity'] else 'OFF'}\n"
-            f"🔔 Notifications: {'ON' if prefs['notifications'] else 'OFF'}\n"
-            f"🚨 Price alerts: {'ON' if prefs['price_alerts'] else 'OFF'}\n"
-            f"💎 Auto-track expensive: {'ON' if prefs['auto_track_expensive'] else 'OFF'}\n\n"
-            "💡 Commands to change settings:\n"
-            "• 'gagstock compact' - Toggle compact mode\n"
-            "• 'gagstock rarity' - Toggle rarity indicators\n"
-            "• 'gagstock notifications' - Toggle notifications\n"
-            "• 'gagstock alertsetting' - Toggle price alert notifications",
-        )
+        try:
+            load_all_data()
+            prefs = get_user_preferences(sender_id)
+            send_message_func(
+                sender_id,
+                "⚙️ Your Gagstock Settings:\n\n"
+                f"📊 Compact mode: {'ON' if prefs['compact_mode'] else 'OFF'}\n"
+                f"🎯 Show rarity: {'ON' if prefs['show_rarity'] else 'OFF'}\n"
+                f"🔔 Notifications: {'ON' if prefs['notifications'] else 'OFF'}\n"
+                f"🚨 Price alerts: {'ON' if prefs['price_alerts'] else 'OFF'}\n"
+                f"💎 Auto-track expensive: {'ON' if prefs['auto_track_expensive'] else 'OFF'}\n\n"
+                "💡 Commands to change settings:\n"
+                "• 'gagstock compact' - Toggle compact mode\n"
+                "• 'gagstock rarity' - Toggle rarity indicators\n"
+                "• 'gagstock notifications' - Toggle notifications\n"
+                "• 'gagstock alertsetting' - Toggle price alert notifications",
+            )
+        except Exception as e:
+            logger.error(f"Error in settings command for {sender_id}: {e}")
+            send_message_func(
+                sender_id, "❌ Error occurred while loading settings. Please try again."
+            )
         return
 
     elif action == "rarity":
-        prefs = get_user_preferences(sender_id)
-        prefs["show_rarity"] = not prefs["show_rarity"]
-        save_data("preferences")
+        try:
+            load_all_data()
+            prefs = get_user_preferences(sender_id)
+            prefs["show_rarity"] = not prefs["show_rarity"]
+            user_preferences[sender_id] = prefs
+            save_data("preferences")
 
-        status = "ON" if prefs["show_rarity"] else "OFF"
-        send_message_func(
-            sender_id,
-            f"🎯 Rarity indicators: {status}\n"
-            "💡 This shows 💎/⭐/🔥 icons next to valuable items.",
-        )
+            status = "ON" if prefs["show_rarity"] else "OFF"
+            send_message_func(
+                sender_id,
+                f"🎯 Rarity indicators: {status}\n"
+                "💡 This shows 💎/⭐/🔥 icons next to valuable items.",
+            )
+        except Exception as e:
+            logger.error(f"Error in rarity command for {sender_id}: {e}")
+            send_message_func(
+                sender_id,
+                "❌ Error occurred while changing rarity setting. Please try again.",
+            )
         return
 
     elif action == "notifications":
-        prefs = get_user_preferences(sender_id)
-        prefs["notifications"] = not prefs["notifications"]
-        save_data("preferences")
+        try:
+            load_all_data()
+            prefs = get_user_preferences(sender_id)
+            prefs["notifications"] = not prefs["notifications"]
+            user_preferences[sender_id] = prefs
+            save_data("preferences")
 
-        status = "ON" if prefs["notifications"] else "OFF"
-        send_message_func(sender_id, f"🔔 Notifications: {status}")
+            status = "ON" if prefs["notifications"] else "OFF"
+            send_message_func(sender_id, f"🔔 Notifications: {status}")
+        except Exception as e:
+            logger.error(f"Error in notifications command for {sender_id}: {e}")
+            send_message_func(
+                sender_id,
+                "❌ Error occurred while changing notification setting. Please try again.",
+            )
         return
 
     elif action == "alertsetting":
-        prefs = get_user_preferences(sender_id)
-        prefs["price_alerts"] = not prefs["price_alerts"]
-        save_data("preferences")
+        try:
+            load_all_data()
+            prefs = get_user_preferences(sender_id)
+            prefs["price_alerts"] = not prefs["price_alerts"]
+            user_preferences[sender_id] = prefs
+            save_data("preferences")
 
-        status = "ON" if prefs["price_alerts"] else "OFF"
-        send_message_func(sender_id, f"🚨 Price alert notifications: {status}")
+            status = "ON" if prefs["price_alerts"] else "OFF"
+            send_message_func(sender_id, f"🚨 Price alert notifications: {status}")
+        except Exception as e:
+            logger.error(f"Error in alertsetting command for {sender_id}: {e}")
+            send_message_func(
+                sender_id,
+                "❌ Error occurred while changing alert setting. Please try again.",
+            )
         return
 
     elif action == "stats":
