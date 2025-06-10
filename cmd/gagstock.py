@@ -34,36 +34,90 @@ PRICE_HISTORY_FILE = "gagstock_price_history.pkl"
 USER_PREFERENCES_FILE = "gagstock_user_preferences.pkl"
 
 
+def load_tracked_items():
+    global user_tracked_items
+    try:
+        if os.path.exists(TRACKED_ITEMS_FILE):
+            with open(TRACKED_ITEMS_FILE, "rb") as f:
+                user_tracked_items = pickle.load(f)
+            logger.info(f"Loaded tracked items for {len(user_tracked_items)} users")
+        else:
+            user_tracked_items = {}
+            logger.info("No existing tracked items file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading tracked items: {e}")
+        user_tracked_items = {}
+
+
+def save_tracked_items_to_file():
+    try:
+        with open(TRACKED_ITEMS_FILE, "wb") as f:
+            pickle.dump(user_tracked_items, f)
+        logger.debug(f"Saved tracked items for {len(user_tracked_items)} users")
+    except Exception as e:
+        logger.error(f"Error saving tracked items: {e}")
+
+
+def load_user_preferences():
+    global user_preferences
+    try:
+        if os.path.exists(USER_PREFERENCES_FILE):
+            with open(USER_PREFERENCES_FILE, "rb") as f:
+                user_preferences = pickle.load(f)
+            logger.info(f"Loaded preferences for {len(user_preferences)} users")
+        else:
+            user_preferences = {}
+            logger.info("No existing preferences file found, starting fresh")
+    except Exception as e:
+        logger.error(f"Error loading preferences: {e}")
+        user_preferences = {}
+
+
+def save_user_preferences():
+    try:
+        with open(USER_PREFERENCES_FILE, "wb") as f:
+            pickle.dump(user_preferences, f)
+        logger.debug(f"Saved preferences for {len(user_preferences)} users")
+    except Exception as e:
+        logger.error(f"Error saving preferences: {e}")
+
+
 def load_all_data():
     global user_tracked_items, user_price_alerts, user_stats, price_history, user_preferences
 
-    files_to_load = [
-        (TRACKED_ITEMS_FILE, "user_tracked_items"),
-        (PRICE_ALERTS_FILE, "user_price_alerts"),
-        (USER_STATS_FILE, "user_stats"),
-        (PRICE_HISTORY_FILE, "price_history"),
-        (USER_PREFERENCES_FILE, "user_preferences"),
-    ]
+    load_tracked_items()
+    load_user_preferences()
 
-    for file_path, var_name in files_to_load:
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, "rb") as f:
-                    data = pickle.load(f)
-                    globals()[var_name] = data
-                logger.info(f"Loaded {var_name} from {file_path}")
-            else:
-                if var_name == "price_history":
-                    globals()[var_name] = defaultdict(list)
-                else:
-                    globals()[var_name] = {}
-                logger.info(f"No existing {file_path} found, starting fresh")
-        except Exception as e:
-            logger.error(f"Error loading {file_path}: {e}")
-            if var_name == "price_history":
-                globals()[var_name] = defaultdict(list)
-            else:
-                globals()[var_name] = {}
+    try:
+        if os.path.exists(PRICE_ALERTS_FILE):
+            with open(PRICE_ALERTS_FILE, "rb") as f:
+                user_price_alerts = pickle.load(f)
+        else:
+            user_price_alerts = {}
+    except Exception as e:
+        logger.error(f"Error loading price alerts: {e}")
+        user_price_alerts = {}
+
+    try:
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "rb") as f:
+                user_stats = pickle.load(f)
+        else:
+            user_stats = {}
+    except Exception as e:
+        logger.error(f"Error loading user stats: {e}")
+        user_stats = {}
+
+    try:
+        if os.path.exists(PRICE_HISTORY_FILE):
+            with open(PRICE_HISTORY_FILE, "rb") as f:
+                price_history_data = pickle.load(f)
+                price_history.update(price_history_data)
+        else:
+            price_history.clear()
+    except Exception as e:
+        logger.error(f"Error loading price history: {e}")
+        price_history.clear()
 
 
 def save_data(data_type):
@@ -318,6 +372,10 @@ def update_user_stats(sender_id, action):
 
 def get_user_preferences(sender_id):
     global user_preferences
+
+    if user_preferences is None:
+        user_preferences = {}
+
     if sender_id not in user_preferences:
         user_preferences[sender_id] = {
             "notifications": True,
@@ -326,16 +384,31 @@ def get_user_preferences(sender_id):
             "price_alerts": True,
             "auto_track_expensive": False,
         }
-        save_data("preferences")
+        try:
+            save_user_preferences()
+        except Exception as e:
+            logger.error(f"Error saving initial preferences for {sender_id}: {e}")
+
     return user_preferences[sender_id]
 
 
 def set_user_preference(sender_id, key, value):
     global user_preferences
-    prefs = get_user_preferences(sender_id)
-    prefs[key] = value
-    user_preferences[sender_id] = prefs
-    save_data("preferences")
+
+    if user_preferences is None:
+        user_preferences = {}
+
+    if sender_id not in user_preferences:
+        get_user_preferences(sender_id)
+
+    user_preferences[sender_id][key] = value
+
+    try:
+        save_user_preferences()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving preference {key} for {sender_id}: {e}")
+        return False
 
 
 def add_price_alert(sender_id, category, item_name, condition, value):
@@ -432,7 +505,7 @@ def save_tracked_items(sender_id, items):
                 f"Added tracked item for {sender_id}: {item['category']}/{item['item_name']}"
             )
 
-    save_data("tracked_items")
+    save_tracked_items_to_file()
     return added_count
 
 
@@ -849,7 +922,24 @@ def fetch_all_data(sender_id, send_message_func):
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
-    load_all_data()
+    # Initialize data first
+    try:
+        load_all_data()
+    except Exception as e:
+        logger.error(f"Error loading data: {e}")
+        # Continue with empty data structures
+        global user_tracked_items, user_price_alerts, user_stats, price_history, user_preferences
+        if "user_tracked_items" not in globals():
+            user_tracked_items = {}
+        if "user_price_alerts" not in globals():
+            user_price_alerts = {}
+        if "user_stats" not in globals():
+            user_stats = {}
+        if "price_history" not in globals():
+            price_history = defaultdict(list)
+        if "user_preferences" not in globals():
+            user_preferences = {}
+
     update_user_stats(sender_id, "command")
 
     if not args:
@@ -939,23 +1029,44 @@ def execute(sender_id, args, context):
 
     elif action == "compact":
         try:
-            load_all_data()
-            prefs = get_user_preferences(sender_id)
-            prefs["compact_mode"] = not prefs["compact_mode"]
-            user_preferences[sender_id] = prefs
-            save_data("preferences")
+            logger.info(f"Compact command called by {sender_id}")
 
-            mode = "Compact" if prefs["compact_mode"] else "Detailed"
-            send_message_func(
-                sender_id,
-                f"⚙️ Display mode switched to: {mode}\n"
-                "💡 This affects how stock updates are shown when tracking is active.",
+            # Ensure preferences are loaded
+            load_user_preferences()
+
+            # Get current preferences
+            prefs = get_user_preferences(sender_id)
+            logger.info(
+                f"Current compact mode for {sender_id}: {prefs.get('compact_mode', False)}"
             )
+
+            # Toggle compact mode
+            new_compact_mode = not prefs.get("compact_mode", False)
+
+            # Save the new preference
+            if set_user_preference(sender_id, "compact_mode", new_compact_mode):
+                mode = "Compact" if new_compact_mode else "Detailed"
+                send_message_func(
+                    sender_id,
+                    f"⚙️ Display mode switched to: {mode}\n"
+                    "💡 This affects how stock updates are shown when tracking is active.",
+                )
+                logger.info(
+                    f"Successfully changed compact mode for {sender_id} to {new_compact_mode}"
+                )
+            else:
+                send_message_func(
+                    sender_id,
+                    "⚠️ Setting saved but may not persist. Display mode changed for this session.",
+                )
         except Exception as e:
-            logger.error(f"Error in compact command for {sender_id}: {e}")
+            logger.error(
+                f"Error in compact command for {sender_id}: {str(e)}", exc_info=True
+            )
             send_message_func(
                 sender_id,
-                "❌ Error occurred while changing display mode. Please try again.",
+                f"❌ Error: {str(e)}\n"
+                "💡 Try using 'gagstock settings' to check if preferences are working.",
             )
         return
 
