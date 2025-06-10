@@ -4,7 +4,8 @@ import logging
 import os
 import tempfile
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
+import mimetypes
 
 logger = logging.getLogger(__name__)
 
@@ -16,88 +17,183 @@ GRAPH_API_VERSION = config["graph_api_version"]
 PAGE_ID = config.get("page_id", "612984285242194")
 
 MAX_VIDEO_SIZE = 25 * 1024 * 1024  # 25MB limit for Facebook videos
-SUPPORTED_VIDEO_FORMATS = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
-SUPPORTED_IMAGE_FORMATS = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+CHUNK_SIZE = 8192
+TIMEOUT_DOWNLOAD = 60
+TIMEOUT_UPLOAD = 180
 
 
-def get_file_size_from_url(url):
-    """Get file size from URL without downloading the entire file"""
+def clean_video_url_for_download(url):
+    """Clean video URL for direct download"""
+    if not url:
+        return url
+
+    # Remove Facebook-specific problematic parameters
+    problematic_params = [
+        "oh=",
+        "oe=",
+        "__cft__=",
+        "ccb=",
+        "_nc_ht=",
+        "_nc_cat=",
+        "_nc_ohc=",
+        "efg=",
+        "_nc_sid=",
+        "_nc_eui2=",
+        "stp=",
+        "tp=",
+        "__gda__=",
+        "expire=",
+        "x-expires=",
+        "x-signature=",
+        "signature=",
+        "token=",
+        "_nc_ad=",
+        "z-m",
+    ]
+
     try:
-        response = requests.head(url, timeout=10, allow_redirects=True)
-        if response.status_code == 200:
-            content_length = response.headers.get("content-length")
-            if content_length:
-                return int(content_length)
-    except Exception as e:
-        logger.warning(f"Could not get file size from URL: {e}")
-    return None
+        parsed = urlparse(url)
+        if parsed.query:
+            query_params = parse_qs(parsed.query, keep_blank_values=True)
+
+            # Keep only safe parameters
+            safe_params = {}
+            for key, values in query_params.items():
+                keep_param = True
+                for bad_param in problematic_params:
+                    if bad_param in key.lower():
+                        keep_param = False
+                        break
+
+                if keep_param and values:
+                    safe_params[key] = values[0]
+
+            if safe_params:
+                query_string = "&".join([f"{k}={v}" for k, v in safe_params.items()])
+                return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{query_string}"
+            else:
+                return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    except:
+        pass
+
+    return url
 
 
-def download_file_with_progress(url, max_size=MAX_VIDEO_SIZE):
-    """Download file with size checking and progress tracking"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
+def download_video_content(video_url, max_retries=3):
+    """Download video content with better headers and retry logic"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "video/webm,video/ogg,video/*;q=0.9,application/octet-stream;q=0.7,audio/*;q=0.6,*/*;q=0.5",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "identity",
+        "Range": "bytes=0-",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "video",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+    }
 
-        response = requests.get(url, headers=headers, stream=True, timeout=30)
-        response.raise_for_status()
-
-        content_length = response.headers.get("content-length")
-        if content_length and int(content_length) > max_size:
-            logger.warning(
-                f"File too large: {int(content_length)} bytes (max: {max_size})"
+    for attempt in range(max_retries):
+        try:
+            logger.info(
+                f"Downloading video attempt {attempt + 1}: {video_url[:100]}..."
             )
-            return None, "File too large"
 
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        downloaded_size = 0
+            # Clean URL before download
+            clean_url = clean_video_url_for_download(video_url)
 
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                temp_file.write(chunk)
-                downloaded_size += len(chunk)
+            # First, check if we can access the video
+            head_response = requests.head(
+                clean_url, headers=headers, timeout=15, allow_redirects=True
+            )
 
-                if downloaded_size > max_size:
-                    temp_file.close()
+            if head_response.status_code not in [200, 206, 302, 301]:
+                logger.warning(
+                    f"Head request failed with status {head_response.status_code}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # Exponential backoff
+                    continue
+                return (
+                    None,
+                    f"Video not accessible (status: {head_response.status_code})",
+                )
+
+            # Check content length
+            content_length = head_response.headers.get("content-length")
+            if content_length and int(content_length) > MAX_VIDEO_SIZE:
+                return (
+                    None,
+                    f"Video too large: {int(content_length)} bytes (max: {MAX_VIDEO_SIZE})",
+                )
+
+            # Download the video
+            response = requests.get(
+                clean_url,
+                headers=headers,
+                stream=True,
+                timeout=TIMEOUT_DOWNLOAD,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+
+            # Create temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            downloaded_size = 0
+
+            try:
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                    if chunk:
+                        temp_file.write(chunk)
+                        downloaded_size += len(chunk)
+
+                        if downloaded_size > MAX_VIDEO_SIZE:
+                            temp_file.close()
+                            os.unlink(temp_file.name)
+                            return None, "Video too large during download"
+
+                temp_file.close()
+
+                if downloaded_size == 0:
                     os.unlink(temp_file.name)
-                    logger.warning(
-                        f"File too large during download: {downloaded_size} bytes"
-                    )
-                    return None, "File too large"
+                    return None, "Downloaded file is empty"
 
-        temp_file.close()
-        logger.info(f"Successfully downloaded file: {downloaded_size} bytes")
-        return temp_file.name, None
+                logger.info(f"Successfully downloaded video: {downloaded_size} bytes")
+                return temp_file.name, None
 
-    except requests.exceptions.Timeout:
-        return None, "Download timeout"
-    except requests.exceptions.RequestException as e:
-        return None, f"Download error: {str(e)}"
-    except Exception as e:
-        return None, f"Unexpected download error: {str(e)}"
+            except Exception as e:
+                temp_file.close()
+                if os.path.exists(temp_file.name):
+                    os.unlink(temp_file.name)
+                raise e
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"Download timeout on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                time.sleep(2**attempt)
+                continue
+            return None, "Download timeout"
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Download failed on attempt {attempt + 1}: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2**attempt)
+                continue
+            return None, f"Download error: {str(e)}"
+
+        except Exception as e:
+            logger.error(f"Unexpected error on attempt {attempt + 1}: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2**attempt)
+                continue
+            return None, f"Unexpected error: {str(e)}"
+
+    return None, "All download attempts failed"
 
 
-def send_video_attachment_by_upload(recipient_id, video_url):
-    """Send video by downloading and uploading to Facebook"""
-    if not PAGE_ACCESS_TOKEN:
-        logger.error("PAGE_ACCESS_TOKEN not configured")
-        return None
-
-    if str(recipient_id) == str(PAGE_ID):
-        logger.debug("Skipping video send to page ID (echo message)")
-        return None
-
-    logger.info(f"Attempting to send video to {recipient_id}: {video_url}")
-
-    # Download the video file
-    temp_file_path, error = download_file_with_progress(video_url)
-    if error:
-        logger.error(f"Failed to download video: {error}")
-        return {"error": error}
-
+def upload_video_to_facebook(temp_file_path):
+    """Upload video file to Facebook and return attachment ID"""
     try:
-        # Upload video to Facebook
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/message_attachments"
 
         params = {"access_token": PAGE_ACCESS_TOKEN}
@@ -108,42 +204,44 @@ def send_video_attachment_by_upload(recipient_id, video_url):
             )
         }
 
+        # Detect file type
+        content_type, _ = mimetypes.guess_type(temp_file_path)
+        if not content_type or not content_type.startswith("video/"):
+            content_type = "video/mp4"
+
         with open(temp_file_path, "rb") as video_file:
-            files = {"filedata": ("video.mp4", video_file, "video/mp4")}
+            files = {"filedata": ("video.mp4", video_file, content_type)}
 
-            logger.info(f"Uploading video to Facebook for recipient {recipient_id}")
+            logger.info("Uploading video to Facebook...")
             response = requests.post(
-                url, params=params, data=data, files=files, timeout=120
+                url, params=params, data=data, files=files, timeout=TIMEOUT_UPLOAD
             )
-
-        # Clean up temp file
-        os.unlink(temp_file_path)
 
         if response.status_code == 200:
-            upload_result = response.json()
-            attachment_id = upload_result.get("attachment_id")
+            result = response.json()
+            attachment_id = result.get("attachment_id")
 
             if attachment_id:
-                # Send the uploaded video
-                return send_uploaded_attachment(recipient_id, attachment_id, "video")
+                logger.info(
+                    f"Video uploaded successfully, attachment_id: {attachment_id}"
+                )
+                return attachment_id, None
             else:
-                logger.error(f"No attachment_id in upload response: {upload_result}")
-                return {"error": "Failed to get attachment ID"}
+                logger.error(f"No attachment_id in response: {result}")
+                return None, "Upload successful but no attachment ID returned"
         else:
-            logger.error(
-                f"Video upload failed: {response.status_code} - {response.text}"
-            )
-            return {"error": f"Upload failed: {response.status_code}"}
+            logger.error(f"Upload failed: {response.status_code} - {response.text}")
+            return None, f"Upload failed: {response.status_code}"
 
+    except requests.exceptions.Timeout:
+        return None, "Upload timeout"
     except Exception as e:
-        if "temp_file_path" in locals() and os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
-        logger.error(f"Error uploading video: {str(e)}")
-        return {"error": f"Upload error: {str(e)}"}
+        logger.error(f"Upload error: {str(e)}")
+        return None, f"Upload error: {str(e)}"
 
 
-def send_uploaded_attachment(recipient_id, attachment_id, attachment_type):
-    """Send an already uploaded attachment using its ID"""
+def send_video_by_attachment_id(recipient_id, attachment_id):
+    """Send video using Facebook attachment ID"""
     try:
         params = {"access_token": PAGE_ACCESS_TOKEN}
         headers = {"Content-Type": "application/json"}
@@ -151,7 +249,7 @@ def send_uploaded_attachment(recipient_id, attachment_id, attachment_type):
             "recipient": {"id": recipient_id},
             "message": {
                 "attachment": {
-                    "type": attachment_type,
+                    "type": "video",
                     "payload": {"attachment_id": attachment_id},
                 }
             },
@@ -165,22 +263,25 @@ def send_uploaded_attachment(recipient_id, attachment_id, attachment_type):
 
         if response.status_code == 200:
             result = response.json()
-            logger.info(f"Successfully sent {attachment_type} to {recipient_id}")
+            logger.info(f"Video sent successfully using attachment ID")
             return result
         else:
             logger.error(
-                f"Failed to send {attachment_type}: {response.status_code} - {response.text}"
+                f"Failed to send video: {response.status_code} - {response.text}"
             )
             return {"error": f"Send failed: {response.status_code}"}
 
     except Exception as e:
-        logger.error(f"Error sending {attachment_type}: {str(e)}")
+        logger.error(f"Error sending video by attachment ID: {str(e)}")
         return {"error": f"Send error: {str(e)}"}
 
 
-def send_video_attachment_by_url(recipient_id, video_url):
-    """Send video by URL (fallback method)"""
+def send_video_by_url_fallback(recipient_id, video_url):
+    """Fallback method: send video by URL (often fails but worth trying)"""
     try:
+        # Clean URL for Facebook compatibility
+        clean_url = clean_video_url_for_download(video_url)
+
         params = {"access_token": PAGE_ACCESS_TOKEN}
         headers = {"Content-Type": "application/json"}
         data = {
@@ -188,7 +289,7 @@ def send_video_attachment_by_url(recipient_id, video_url):
             "message": {
                 "attachment": {
                     "type": "video",
-                    "payload": {"url": video_url, "is_reusable": False},
+                    "payload": {"url": clean_url, "is_reusable": False},
                 }
             },
         }
@@ -201,12 +302,10 @@ def send_video_attachment_by_url(recipient_id, video_url):
 
         if response.status_code == 200:
             result = response.json()
-            logger.info(f"Successfully sent video by URL to {recipient_id}")
+            logger.info("Video sent successfully by URL")
             return result
         else:
-            logger.error(
-                f"Failed to send video by URL: {response.status_code} - {response.text}"
-            )
+            logger.error(f"URL method failed: {response.status_code} - {response.text}")
             return {"error": f"URL send failed: {response.status_code}"}
 
     except Exception as e:
@@ -215,28 +314,63 @@ def send_video_attachment_by_url(recipient_id, video_url):
 
 
 def send_video_attachment(recipient_id, video_url, use_upload=True):
-    """Main function to send video attachment with fallback methods"""
+    """Main function to send video with comprehensive fallback methods"""
     if not video_url:
         return {"error": "No video URL provided"}
 
-    logger.info(f"Sending video to {recipient_id}, upload method: {use_upload}")
+    if str(recipient_id) == str(PAGE_ID):
+        logger.debug("Skipping video send to page ID (echo message)")
+        return {"error": "Cannot send to page ID"}
 
-    # Check file size first
-    file_size = get_file_size_from_url(video_url)
-    if file_size and file_size > MAX_VIDEO_SIZE:
-        logger.warning(f"Video too large: {file_size} bytes (max: {MAX_VIDEO_SIZE})")
-        return {"error": "Video file too large"}
+    logger.info(f"Attempting to send video to {recipient_id}")
+    logger.debug(f"Video URL: {video_url[:100]}...")
 
     if use_upload:
-        # Try upload method first
-        result = send_video_attachment_by_upload(recipient_id, video_url)
-        if result and "error" not in result:
-            return result
+        # Method 1: Download and upload (most reliable)
+        temp_file_path, download_error = download_video_content(video_url)
 
-        logger.warning("Upload method failed, trying URL method")
+        if temp_file_path:
+            try:
+                # Upload to Facebook
+                attachment_id, upload_error = upload_video_to_facebook(temp_file_path)
 
-    # Fallback to URL method
-    return send_video_attachment_by_url(recipient_id, video_url)
+                if attachment_id:
+                    # Send using attachment ID
+                    result = send_video_by_attachment_id(recipient_id, attachment_id)
+                    os.unlink(temp_file_path)  # Clean up
+
+                    if result and "error" not in result:
+                        return result
+                    else:
+                        logger.warning(
+                            "Attachment ID method failed, trying URL fallback"
+                        )
+                else:
+                    logger.warning(f"Upload failed: {upload_error}")
+
+            except Exception as e:
+                logger.error(f"Upload process failed: {str(e)}")
+            finally:
+                # Clean up temp file
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
+        else:
+            logger.warning(f"Download failed: {download_error}")
+
+    # Method 2: Send by URL (fallback)
+    logger.info("Trying URL method as fallback...")
+    url_result = send_video_by_url_fallback(recipient_id, video_url)
+
+    if url_result and "error" not in url_result:
+        return url_result
+
+    # If all methods failed
+    if use_upload:
+        return {
+            "error": "Both upload and URL methods failed. Video might be too large, private, or in unsupported format."
+        }
+    else:
+        return url_result
 
 
 def send_image_attachment(recipient_id, image_url):
@@ -275,42 +409,6 @@ def send_image_attachment(recipient_id, image_url):
         return {"error": f"Image send error: {str(e)}"}
 
 
-def send_file_attachment(recipient_id, file_url):
-    """Send file attachment"""
-    try:
-        params = {"access_token": PAGE_ACCESS_TOKEN}
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "recipient": {"id": recipient_id},
-            "message": {
-                "attachment": {
-                    "type": "file",
-                    "payload": {"url": file_url, "is_reusable": False},
-                }
-            },
-        }
-
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-
-        response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=60
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"Successfully sent file to {recipient_id}")
-            return result
-        else:
-            logger.error(
-                f"Failed to send file: {response.status_code} - {response.text}"
-            )
-            return {"error": f"File send failed: {response.status_code}"}
-
-    except Exception as e:
-        logger.error(f"Error sending file: {str(e)}")
-        return {"error": f"File send error: {str(e)}"}
-
-
 def send_audio_attachment(recipient_id, audio_url):
     """Send audio attachment"""
     try:
@@ -347,23 +445,66 @@ def send_audio_attachment(recipient_id, audio_url):
         return {"error": f"Audio send error: {str(e)}"}
 
 
+def send_file_attachment(recipient_id, file_url):
+    """Send file attachment"""
+    try:
+        params = {"access_token": PAGE_ACCESS_TOKEN}
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "recipient": {"id": recipient_id},
+            "message": {
+                "attachment": {
+                    "type": "file",
+                    "payload": {"url": file_url, "is_reusable": False},
+                }
+            },
+        }
+
+        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
+
+        response = requests.post(
+            url, params=params, headers=headers, json=data, timeout=60
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"Successfully sent file to {recipient_id}")
+            return result
+        else:
+            logger.error(
+                f"Failed to send file: {response.status_code} - {response.text}"
+            )
+            return {"error": f"File send failed: {response.status_code}"}
+
+    except Exception as e:
+        logger.error(f"Error sending file: {str(e)}")
+        return {"error": f"File send error: {str(e)}"}
+
+
 def detect_attachment_type(url):
     """Detect attachment type based on URL"""
-    parsed_url = urlparse(url)
-    path = parsed_url.path.lower()
+    url_lower = url.lower()
 
-    for ext in SUPPORTED_VIDEO_FORMATS:
-        if path.endswith(ext):
+    video_indicators = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"]
+    image_indicators = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]
+    audio_indicators = [".mp3", ".wav", ".aac", ".ogg", ".m4a"]
+
+    # Check file extension
+    for ext in video_indicators:
+        if ext in url_lower:
             return "video"
 
-    for ext in SUPPORTED_IMAGE_FORMATS:
-        if path.endswith(ext):
+    for ext in image_indicators:
+        if ext in url_lower:
             return "image"
 
-    # Default to video for social media URLs
+    for ext in audio_indicators:
+        if ext in url_lower:
+            return "audio"
+
+    # Check domain patterns
     if any(
-        domain in url.lower()
-        for domain in ["tiktok", "facebook", "instagram", "youtube"]
+        domain in url_lower for domain in ["tiktok", "facebook", "instagram", "youtube"]
     ):
         return "video"
 
