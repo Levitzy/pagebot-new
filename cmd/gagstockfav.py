@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import time
 import os
 import pickle
+from collections import defaultdict
+import statistics
 
 try:
     import pytz
@@ -16,23 +18,71 @@ logger = logging.getLogger(__name__)
 
 user_favorite_sessions = {}
 user_tracked_items = {}
+user_preferences = {}
+user_favorite_stats = {}
+user_notification_history = {}
+user_custom_filters = {}
+price_history = defaultdict(list)
+
 PH_OFFSET = 8
 TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
+USER_PREFERENCES_FILE = "gagstock_user_preferences.pkl"
+FAVORITE_STATS_FILE = "gagstockfav_stats.pkl"
+NOTIFICATION_HISTORY_FILE = "gagstockfav_notifications.pkl"
+CUSTOM_FILTERS_FILE = "gagstockfav_filters.pkl"
+PRICE_HISTORY_FILE = "gagstock_price_history.pkl"
 
 
-def load_tracked_items():
-    global user_tracked_items
+def load_all_data():
+    global user_tracked_items, user_preferences, user_favorite_stats, user_notification_history, user_custom_filters, price_history
+
+    files_to_load = [
+        (TRACKED_ITEMS_FILE, "user_tracked_items"),
+        (USER_PREFERENCES_FILE, "user_preferences"),
+        (FAVORITE_STATS_FILE, "user_favorite_stats"),
+        (NOTIFICATION_HISTORY_FILE, "user_notification_history"),
+        (CUSTOM_FILTERS_FILE, "user_custom_filters"),
+        (PRICE_HISTORY_FILE, "price_history"),
+    ]
+
+    for file_path, var_name in files_to_load:
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    data = pickle.load(f)
+                    globals()[var_name] = data
+                logger.info(f"Loaded {var_name} from {file_path}")
+            else:
+                if var_name == "price_history":
+                    globals()[var_name] = defaultdict(list)
+                else:
+                    globals()[var_name] = {}
+                logger.info(f"No existing {file_path} found, starting fresh")
+        except Exception as e:
+            logger.error(f"Error loading {file_path}: {e}")
+            if var_name == "price_history":
+                globals()[var_name] = defaultdict(list)
+            else:
+                globals()[var_name] = {}
+
+
+def save_data(data_type):
+    file_mapping = {
+        "tracked_items": (TRACKED_ITEMS_FILE, user_tracked_items),
+        "preferences": (USER_PREFERENCES_FILE, user_preferences),
+        "favorite_stats": (FAVORITE_STATS_FILE, user_favorite_stats),
+        "notifications": (NOTIFICATION_HISTORY_FILE, user_notification_history),
+        "filters": (CUSTOM_FILTERS_FILE, user_custom_filters),
+        "price_history": (PRICE_HISTORY_FILE, dict(price_history)),
+    }
+
     try:
-        if os.path.exists(TRACKED_ITEMS_FILE):
-            with open(TRACKED_ITEMS_FILE, "rb") as f:
-                user_tracked_items = pickle.load(f)
-            logger.info(f"Loaded tracked items for {len(user_tracked_items)} users")
-        else:
-            user_tracked_items = {}
-            logger.info("No existing tracked items file found, starting fresh")
+        file_path, data = file_mapping[data_type]
+        with open(file_path, "wb") as f:
+            pickle.dump(data, f)
+        logger.debug(f"Saved {data_type} to {file_path}")
     except Exception as e:
-        logger.error(f"Error loading tracked items: {e}")
-        user_tracked_items = {}
+        logger.error(f"Error saving {data_type}: {e}")
 
 
 def pad(n):
@@ -141,6 +191,17 @@ def get_available_categories():
     return ["gear", "seed", "egg", "honey", "cosmetic"]
 
 
+def get_category_emoji(category):
+    category_emojis = {
+        "gear": "🛠️",
+        "seed": "🌱",
+        "egg": "🥚",
+        "honey": "🍯",
+        "cosmetic": "🎨",
+    }
+    return category_emojis.get(category, "📦")
+
+
 def get_all_items_from_stock(stock_data):
     all_items = []
     categories = {
@@ -170,6 +231,134 @@ def normalize_item_name(name):
     return name.lower().strip().replace("_", " ").replace("-", " ")
 
 
+def get_user_preferences(sender_id):
+    if sender_id not in user_preferences:
+        user_preferences[sender_id] = {
+            "smart_notifications": True,
+            "value_threshold": 0,
+            "priority_categories": [],
+            "notification_cooldown": 300,
+            "show_price_trends": True,
+            "compact_notifications": False,
+            "alert_sound": True,
+            "daily_summary": False,
+            "auto_remove_purchased": False,
+        }
+        save_data("preferences")
+    return user_preferences[sender_id]
+
+
+def get_user_stats(sender_id):
+    if sender_id not in user_favorite_stats:
+        user_favorite_stats[sender_id] = {
+            "notifications_sent": 0,
+            "items_found": 0,
+            "total_value_found": 0,
+            "favorite_categories": {},
+            "sessions_started": 0,
+            "last_notification": None,
+            "best_find_value": 0,
+            "best_find_item": None,
+        }
+        save_data("favorite_stats")
+    return user_favorite_stats[sender_id]
+
+
+def update_user_stats(sender_id, action, data=None):
+    stats = get_user_stats(sender_id)
+
+    if action == "notification_sent":
+        stats["notifications_sent"] += 1
+        stats["last_notification"] = get_ph_time().isoformat()
+    elif action == "item_found":
+        stats["items_found"] += 1
+        if data and "value" in data:
+            stats["total_value_found"] += data["value"]
+            if data["value"] > stats["best_find_value"]:
+                stats["best_find_value"] = data["value"]
+                stats["best_find_item"] = data.get("name", "Unknown")
+        if data and "category" in data:
+            category = data["category"]
+            stats["favorite_categories"][category] = (
+                stats["favorite_categories"].get(category, 0) + 1
+            )
+    elif action == "session_started":
+        stats["sessions_started"] += 1
+
+    save_data("favorite_stats")
+
+
+def get_price_trend(item_name, category):
+    key = f"{category}/{item_name}"
+    if key not in price_history or len(price_history[key]) < 2:
+        return "📊 No trend data"
+
+    recent_prices = [entry["value"] for entry in price_history[key][-10:]]
+    if len(recent_prices) < 2:
+        return "📊 Insufficient data"
+
+    first_half = recent_prices[: len(recent_prices) // 2]
+    second_half = recent_prices[len(recent_prices) // 2 :]
+
+    avg_first = statistics.mean(first_half)
+    avg_second = statistics.mean(second_half)
+
+    if avg_second > avg_first * 1.1:
+        return "📈 Rising"
+    elif avg_second < avg_first * 0.9:
+        return "📉 Falling"
+    else:
+        return "📊 Stable"
+
+
+def add_notification_to_history(sender_id, item_data):
+    if sender_id not in user_notification_history:
+        user_notification_history[sender_id] = []
+
+    notification = {
+        "timestamp": get_ph_time().isoformat(),
+        "item": item_data,
+        "value": item_data.get("value", 0),
+    }
+
+    user_notification_history[sender_id].append(notification)
+
+    if len(user_notification_history[sender_id]) > 100:
+        user_notification_history[sender_id] = user_notification_history[sender_id][
+            -100:
+        ]
+
+    save_data("notifications")
+
+
+def should_send_notification(sender_id, item):
+    prefs = get_user_preferences(sender_id)
+
+    if item["value"] < prefs["value_threshold"]:
+        return False
+
+    if (
+        prefs["priority_categories"]
+        and item["category"] not in prefs["priority_categories"]
+    ):
+        return False
+
+    if sender_id in user_notification_history:
+        last_notifications = user_notification_history[sender_id][-5:]
+        for notif in last_notifications:
+            if (
+                notif["item"]["display_name"] == item["display_name"]
+                and notif["item"]["category"] == item["category"]
+            ):
+                notif_time = datetime.fromisoformat(notif["timestamp"])
+                if (get_ph_time() - notif_time).total_seconds() < prefs[
+                    "notification_cooldown"
+                ]:
+                    return False
+
+    return True
+
+
 def check_tracked_items_in_stock(sender_id, stock_data):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return []
@@ -187,10 +376,45 @@ def check_tracked_items_in_stock(sender_id, stock_data):
                 or tracked_normalized in item_normalized
                 or item_normalized in tracked_normalized
             ) and item["category"] == tracked_item["category"]:
-                tracked_in_stock.append(item)
+
+                if should_send_notification(sender_id, item):
+                    tracked_in_stock.append(item)
+                    update_user_stats(
+                        sender_id,
+                        "item_found",
+                        {
+                            "value": item["value"],
+                            "name": item["display_name"],
+                            "category": item["category"],
+                        },
+                    )
+                    add_notification_to_history(sender_id, item)
                 break
 
     return tracked_in_stock
+
+
+def get_smart_recommendations(sender_id, stock_data):
+    if sender_id not in user_tracked_items:
+        return []
+
+    all_items = get_all_items_from_stock(stock_data)
+    tracked_categories = set(item["category"] for item in user_tracked_items[sender_id])
+
+    recommendations = []
+    for item in all_items:
+        if (
+            item["category"] in tracked_categories
+            and item["value"] >= 1000
+            and not any(
+                normalize_item_name(tracked["item_name"])
+                == normalize_item_name(item["display_name"])
+                for tracked in user_tracked_items[sender_id]
+            )
+        ):
+            recommendations.append(item)
+
+    return sorted(recommendations, key=lambda x: x["value"], reverse=True)[:3]
 
 
 def cleanup_favorite_session(sender_id):
@@ -281,6 +505,8 @@ def fetch_favorite_data(sender_id, send_message_func):
             logger.info(f"Favorite session {sender_id} was removed during fetch")
             return
 
+        prefs = get_user_preferences(sender_id)
+
         if combined_key == session.get("last_combined_key"):
             logger.debug(
                 f"No changes detected for favorites {sender_id}, scheduling next check"
@@ -292,48 +518,90 @@ def fetch_favorite_data(sender_id, send_message_func):
             session["last_combined_key"] = combined_key
 
             tracked_in_stock = check_tracked_items_in_stock(sender_id, stock_data)
+
             if tracked_in_stock:
                 restocks = get_next_restocks()
 
-                message = "⭐ Your favorite items are in stock!\n\n"
+                if prefs["compact_notifications"]:
+                    message = (
+                        f"⭐ {len(tracked_in_stock)} favorite item(s) in stock!\n\n"
+                    )
 
-                category_restocks = {
-                    "gear": restocks["gear"],
-                    "seed": restocks["seed"],
-                    "egg": restocks["egg"],
-                    "honey": restocks["honey"],
-                    "cosmetic": restocks["cosmetic"],
-                }
+                    for item in tracked_in_stock:
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        rarity = ""
+                        if item["value"] >= 10000:
+                            rarity = " 💎"
+                        elif item["value"] >= 1000:
+                            rarity = " ⭐"
+                        elif item["value"] >= 100:
+                            rarity = " 🔥"
 
-                for item in tracked_in_stock:
-                    emoji_part = f"{item['emoji']} " if item["emoji"] else ""
-                    restock_time = category_restocks.get(item["category"], "Unknown")
-                    message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}\n"
-                    message += f"   📦 Category: {item['category'].title()} | ⏳ Restock in: {restock_time}\n\n"
+                        trend = ""
+                        if prefs["show_price_trends"]:
+                            trend = f" | {get_price_trend(item['display_name'], item['category'])}"
 
-                weather_icon = weather_data.get("icon", "🌦️")
-                weather_current = weather_data.get("currentWeather", "Unknown")
-                weather_description = weather_data.get("description", "No description")
-                weather_effect = weather_data.get("effectDescription", "No effect")
-                weather_bonus = weather_data.get("cropBonuses", "No bonus")
-                weather_visual = weather_data.get("visualCue", "No visual cue")
-                weather_rarity = weather_data.get("rarity", "Unknown")
+                        message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}{rarity}{trend}\n"
 
-                weather_details = (
-                    f"🌤️ Weather: {weather_icon} {weather_current}\n"
-                    f"📖 Description: {weather_description}\n"
-                    f"📌 Effect: {weather_effect}\n"
-                    f"🪄 Crop Bonus: {weather_bonus}\n"
-                    f"📢 Visual Cue: {weather_visual}\n"
-                    f"🌟 Rarity: {weather_rarity}"
-                )
+                    message += f"\n📊 Total value: {format_value(sum(item['value'] for item in tracked_in_stock))}"
+                else:
+                    message = "⭐ Your favorite items are in stock!\n\n"
 
-                message += weather_details
+                    category_restocks = {
+                        "gear": restocks["gear"],
+                        "seed": restocks["seed"],
+                        "egg": restocks["egg"],
+                        "honey": restocks["honey"],
+                        "cosmetic": restocks["cosmetic"],
+                    }
+
+                    for item in tracked_in_stock:
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        restock_time = category_restocks.get(
+                            item["category"], "Unknown"
+                        )
+
+                        rarity = ""
+                        if item["value"] >= 10000:
+                            rarity = " 💎 Ultra Rare"
+                        elif item["value"] >= 1000:
+                            rarity = " ⭐ Rare"
+                        elif item["value"] >= 100:
+                            rarity = " 🔥 Uncommon"
+
+                        trend = ""
+                        if prefs["show_price_trends"]:
+                            trend = f" | {get_price_trend(item['display_name'], item['category'])}"
+
+                        message += f"🔔 {emoji_part}{item['display_name']}: {format_value(item['value'])}{rarity}\n"
+                        message += f"   📦 {item['category'].title()} | ⏳ Restock: {restock_time}{trend}\n\n"
+
+                    total_value = sum(item["value"] for item in tracked_in_stock)
+                    message += f"💰 Total value found: {format_value(total_value)}\n\n"
+
+                    weather_icon = weather_data.get("icon", "🌦️")
+                    weather_current = weather_data.get("currentWeather", "Unknown")
+                    weather_effect = weather_data.get("effectDescription", "No effect")
+                    weather_bonus = weather_data.get("cropBonuses", "No bonus")
+
+                    message += f"🌤️ Weather: {weather_icon} {weather_current}\n"
+                    message += f"📌 Effect: {weather_effect}\n"
+                    message += f"🪄 Bonus: {weather_bonus}"
+
+                if prefs["smart_notifications"]:
+                    recommendations = get_smart_recommendations(sender_id, stock_data)
+                    if recommendations:
+                        message += f"\n\n💡 Smart Recommendations:\n"
+                        for rec in recommendations:
+                            emoji_part = f"{rec['emoji']} " if rec["emoji"] else ""
+                            message += f"• {emoji_part}{rec['display_name']}: {format_value(rec['value'])}\n"
+                        message += "\n💭 Consider adding these valuable items to your favorites!"
 
                 if message != session.get("last_message"):
                     session["last_message"] = message
                     try:
                         send_message_func(sender_id, message)
+                        update_user_stats(sender_id, "notification_sent")
                         logger.info(f"Sent gagstockfav update to {sender_id}")
                     except Exception as e:
                         logger.error(
@@ -392,15 +660,40 @@ def fetch_favorite_data(sender_id, send_message_func):
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
-    load_tracked_items()
+    load_all_data()
 
     if not args:
+        stats = get_user_stats(sender_id)
+        prefs = get_user_preferences(sender_id)
+        tracked_count = len(user_tracked_items.get(sender_id, []))
+
         send_message_func(
             sender_id,
-            "📌 Gagstockfav Commands:\n\n"
-            "⭐ Favorites Tracking:\n"
+            "⭐ Gagstockfav — Smart Favorites Tracker\n\n"
+            "🎯 Favorites Tracking:\n"
             "• 'gagstockfav on' - Start tracking only your favorite items\n"
-            "• 'gagstockfav off' - Stop favorites tracking\n\n"
+            "• 'gagstockfav off' - Stop favorites tracking\n"
+            "• 'gagstockfav smart' - Toggle smart notifications\n"
+            "• 'gagstockfav compact' - Toggle compact mode\n\n"
+            "⚙️ Advanced Settings:\n"
+            "• 'gagstockfav threshold value' - Set minimum value to notify\n"
+            "• 'gagstockfav cooldown seconds' - Set notification cooldown\n"
+            "• 'gagstockfav priority category1,category2' - Set priority categories\n"
+            "• 'gagstockfav trends' - Toggle price trend display\n\n"
+            "📊 Analytics & History:\n"
+            "• 'gagstockfav stats' - View your tracking statistics\n"
+            "• 'gagstockfav history' - Recent notification history\n"
+            "• 'gagstockfav summary' - Daily summary of findings\n"
+            "• 'gagstockfav settings' - View/change all preferences\n\n"
+            "🔍 Quick Actions:\n"
+            "• 'gagstockfav test' - Test with current stock\n"
+            "• 'gagstockfav recommend' - Get smart recommendations\n\n"
+            f"📊 Your Status:\n"
+            f"⭐ Tracking: {tracked_count} favorite items\n"
+            f"🔔 Notifications sent: {stats.get('notifications_sent', 0)}\n"
+            f"💎 Best find: {stats.get('best_find_item', 'None')} ({format_value(stats.get('best_find_value', 0))})\n"
+            f"🎯 Smart mode: {'ON' if prefs['smart_notifications'] else 'OFF'}\n"
+            f"📊 Compact mode: {'ON' if prefs['compact_notifications'] else 'OFF'}\n\n"
             "💡 This tracks only items from your favorites list and notifies\n"
             "when they appear in stock. Independent from 'gagstock on/off'.\n\n"
             "🔔 First add items to favorites:\n"
@@ -409,7 +702,8 @@ def execute(sender_id, args, context):
             f"📋 Categories: {', '.join(get_available_categories())}\n"
             "🔍 Examples:\n"
             "   • 'gagstock add gear/ancient_shovel'\n"
-            "   • 'gagstockfav on' (tracks only favorites)",
+            "   • 'gagstockfav on' (tracks only favorites)\n"
+            "   • 'gagstockfav threshold 1000' (only notify for items ≥1000 value)",
         )
         return
 
@@ -437,6 +731,8 @@ def execute(sender_id, args, context):
             )
             return
 
+        update_user_stats(sender_id, "session_started")
+        prefs = get_user_preferences(sender_id)
         tracked_count = len(user_tracked_items[sender_id])
         tracked_list = []
         for item in user_tracked_items[sender_id]:
@@ -447,7 +743,11 @@ def execute(sender_id, args, context):
             f"⭐ Gagstockfav started! Tracking {tracked_count} favorite items.\n"
             f"🔔 You'll be notified only when your favorite items are in stock.\n\n"
             f"📋 Tracking: {', '.join(tracked_list[:3])}{'...' if tracked_count > 3 else ''}\n\n"
-            f"💡 Use 'gagstock list' to see all favorite items.",
+            f"🎯 Smart notifications: {'ON' if prefs['smart_notifications'] else 'OFF'}\n"
+            f"📊 Compact mode: {'ON' if prefs['compact_notifications'] else 'OFF'}\n"
+            f"💰 Value threshold: {format_value(prefs['value_threshold'])}\n"
+            f"⏰ Cooldown: {prefs['notification_cooldown']}s\n\n"
+            f"💡 Use 'gagstockfav settings' to customize your experience.",
         )
 
         user_favorite_sessions[sender_id] = {
@@ -468,10 +768,456 @@ def execute(sender_id, args, context):
             send_message_func(sender_id, "⚠️ Gagstockfav is not running.")
         return
 
+    elif action == "smart":
+        prefs = get_user_preferences(sender_id)
+        prefs["smart_notifications"] = not prefs["smart_notifications"]
+        save_data("preferences")
+
+        status = "ON" if prefs["smart_notifications"] else "OFF"
+        send_message_func(
+            sender_id,
+            f"🎯 Smart notifications: {status}\n"
+            "💡 Smart mode provides item recommendations and enhanced analytics.",
+        )
+        return
+
+    elif action == "compact":
+        prefs = get_user_preferences(sender_id)
+        prefs["compact_notifications"] = not prefs["compact_notifications"]
+        save_data("preferences")
+
+        status = "ON" if prefs["compact_notifications"] else "OFF"
+        send_message_func(
+            sender_id,
+            f"📊 Compact notifications: {status}\n"
+            "💡 Compact mode shows shorter, summarized notifications.",
+        )
+        return
+
+    elif action == "trends":
+        prefs = get_user_preferences(sender_id)
+        prefs["show_price_trends"] = not prefs["show_price_trends"]
+        save_data("preferences")
+
+        status = "ON" if prefs["show_price_trends"] else "OFF"
+        send_message_func(
+            sender_id,
+            f"📈 Price trends in notifications: {status}\n"
+            "💡 Shows 📈📉📊 indicators for price movement patterns.",
+        )
+        return
+
+    elif action == "threshold":
+        if len(args) < 2:
+            prefs = get_user_preferences(sender_id)
+            send_message_func(
+                sender_id,
+                f"💰 Value Threshold Settings:\n\n"
+                f"Current threshold: {format_value(prefs['value_threshold'])}\n\n"
+                "💡 Usage: 'gagstockfav threshold value'\n"
+                "🔍 Examples:\n"
+                "   • 'gagstockfav threshold 0' (notify for all items)\n"
+                "   • 'gagstockfav threshold 1000' (only notify for items ≥1000)\n"
+                "   • 'gagstockfav threshold 5000' (only high-value items)\n\n"
+                "This filters notifications to only show items above the specified value.",
+            )
+            return
+
+        try:
+            threshold = int(args[1])
+            if threshold < 0:
+                send_message_func(sender_id, "❌ Threshold must be 0 or positive")
+                return
+        except ValueError:
+            send_message_func(sender_id, "❌ Threshold must be a number")
+            return
+
+        prefs = get_user_preferences(sender_id)
+        prefs["value_threshold"] = threshold
+        save_data("preferences")
+
+        send_message_func(
+            sender_id,
+            f"💰 Value threshold set to: {format_value(threshold)}\n"
+            "🔔 You'll only be notified for items with value ≥ this amount.",
+        )
+        return
+
+    elif action == "cooldown":
+        if len(args) < 2:
+            prefs = get_user_preferences(sender_id)
+            send_message_func(
+                sender_id,
+                f"⏰ Notification Cooldown Settings:\n\n"
+                f"Current cooldown: {prefs['notification_cooldown']} seconds\n\n"
+                "💡 Usage: 'gagstockfav cooldown seconds'\n"
+                "🔍 Examples:\n"
+                "   • 'gagstockfav cooldown 60' (1 minute)\n"
+                "   • 'gagstockfav cooldown 300' (5 minutes)\n"
+                "   • 'gagstockfav cooldown 900' (15 minutes)\n\n"
+                "This prevents spam by limiting how often you get notified for the same item.",
+            )
+            return
+
+        try:
+            cooldown = int(args[1])
+            if cooldown < 0:
+                send_message_func(sender_id, "❌ Cooldown must be 0 or positive")
+                return
+        except ValueError:
+            send_message_func(sender_id, "❌ Cooldown must be a number")
+            return
+
+        prefs = get_user_preferences(sender_id)
+        prefs["notification_cooldown"] = cooldown
+        save_data("preferences")
+
+        minutes = cooldown // 60
+        seconds = cooldown % 60
+        time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+
+        send_message_func(
+            sender_id,
+            f"⏰ Notification cooldown set to: {time_str}\n"
+            "🔔 Same items won't notify again within this timeframe.",
+        )
+        return
+
+    elif action == "priority":
+        if len(args) < 2:
+            prefs = get_user_preferences(sender_id)
+            current_priorities = prefs["priority_categories"]
+
+            send_message_func(
+                sender_id,
+                f"🎯 Priority Categories Settings:\n\n"
+                f"Current priorities: {', '.join(current_priorities) if current_priorities else 'All categories'}\n\n"
+                "💡 Usage: 'gagstockfav priority category1,category2'\n"
+                "💡 Use 'gagstockfav priority all' to reset\n\n"
+                "🔍 Examples:\n"
+                "   • 'gagstockfav priority gear,egg' (only gear and eggs)\n"
+                "   • 'gagstockfav priority cosmetic' (only cosmetics)\n"
+                "   • 'gagstockfav priority all' (all categories)\n\n"
+                f"📋 Available: {', '.join(get_available_categories())}\n\n"
+                "This limits notifications to only your priority categories.",
+            )
+            return
+
+        priority_input = args[1].lower()
+        if priority_input == "all":
+            priorities = []
+        else:
+            priorities = [cat.strip() for cat in priority_input.split(",")]
+            invalid_cats = [
+                cat for cat in priorities if cat not in get_available_categories()
+            ]
+            if invalid_cats:
+                send_message_func(
+                    sender_id,
+                    f"❌ Invalid categories: {', '.join(invalid_cats)}\n"
+                    f"📋 Valid categories: {', '.join(get_available_categories())}",
+                )
+                return
+
+        prefs = get_user_preferences(sender_id)
+        prefs["priority_categories"] = priorities
+        save_data("preferences")
+
+        if priorities:
+            send_message_func(
+                sender_id,
+                f"🎯 Priority categories set to: {', '.join(priorities)}\n"
+                "🔔 You'll only get notifications for items in these categories.",
+            )
+        else:
+            send_message_func(
+                sender_id,
+                "🎯 Priority categories reset - you'll get notifications for all categories.",
+            )
+        return
+
+    elif action == "stats":
+        stats = get_user_stats(sender_id)
+        prefs = get_user_preferences(sender_id)
+        tracked_count = len(user_tracked_items.get(sender_id, []))
+
+        last_notification = stats.get("last_notification")
+        if last_notification:
+            try:
+                last_notif_dt = datetime.fromisoformat(last_notification)
+                last_notif_str = last_notif_dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                last_notif_str = "Unknown"
+        else:
+            last_notif_str = "Never"
+
+        avg_value = 0
+        if stats["items_found"] > 0:
+            avg_value = stats["total_value_found"] / stats["items_found"]
+
+        favorite_category = "None"
+        if stats["favorite_categories"]:
+            favorite_category = max(
+                stats["favorite_categories"], key=stats["favorite_categories"].get
+            )
+
+        send_message_func(
+            sender_id,
+            f"📊 Your Gagstockfav Statistics:\n\n"
+            f"⭐ Items being tracked: {tracked_count}\n"
+            f"🔔 Notifications sent: {stats['notifications_sent']}\n"
+            f"🎯 Items found in stock: {stats['items_found']}\n"
+            f"💰 Total value found: {format_value(stats['total_value_found'])}\n"
+            f"📈 Average item value: {format_value(avg_value)}\n"
+            f"💎 Best find: {stats.get('best_find_item', 'None')} ({format_value(stats['best_find_value'])})\n"
+            f"📡 Sessions started: {stats['sessions_started']}\n"
+            f"❤️ Favorite category: {favorite_category}\n"
+            f"🕐 Last notification: {last_notif_str}\n\n"
+            f"⚙️ Current Settings:\n"
+            f"💰 Value threshold: {format_value(prefs['value_threshold'])}\n"
+            f"⏰ Cooldown: {prefs['notification_cooldown']}s\n"
+            f"🎯 Smart mode: {'ON' if prefs['smart_notifications'] else 'OFF'}\n"
+            f"📊 Compact mode: {'ON' if prefs['compact_notifications'] else 'OFF'}",
+        )
+        return
+
+    elif action == "history":
+        if (
+            sender_id not in user_notification_history
+            or not user_notification_history[sender_id]
+        ):
+            send_message_func(
+                sender_id,
+                "📊 No notification history yet.\n\n"
+                "💡 Start tracking with 'gagstockfav on' to build your history!",
+            )
+            return
+
+        history = user_notification_history[sender_id]
+        recent_history = history[-10:]
+
+        message = "📊 Recent Notification History:\n\n"
+
+        total_value = 0
+        for i, notification in enumerate(reversed(recent_history), 1):
+            item = notification["item"]
+            timestamp = datetime.fromisoformat(notification["timestamp"])
+            time_str = timestamp.strftime("%m-%d %H:%M")
+
+            emoji_part = f"{item['emoji']} " if item.get("emoji") else ""
+            category_emoji = get_category_emoji(item["category"])
+
+            total_value += item["value"]
+
+            message += f"{i}. {time_str} | {category_emoji} {emoji_part}{item['display_name']}: {format_value(item['value'])}\n"
+
+        message += f"\n📊 Last 10 notifications summary:\n"
+        message += f"💰 Total value: {format_value(total_value)}\n"
+        message += (
+            f"📈 Average value: {format_value(total_value / len(recent_history))}\n"
+        )
+        message += f"🔔 Total notifications: {len(history)}"
+
+        send_message_func(sender_id, message)
+        return
+
+    elif action == "summary":
+        if (
+            sender_id not in user_notification_history
+            or not user_notification_history[sender_id]
+        ):
+            send_message_func(
+                sender_id,
+                "📊 No data for summary yet.\n\n"
+                "💡 Start tracking to generate daily summaries!",
+            )
+            return
+
+        now = get_ph_time()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        today_notifications = []
+        for notification in user_notification_history[sender_id]:
+            notif_time = datetime.fromisoformat(notification["timestamp"])
+            if notif_time >= today_start:
+                today_notifications.append(notification)
+
+        if not today_notifications:
+            send_message_func(
+                sender_id,
+                f"📊 Daily Summary for {now.strftime('%Y-%m-%d')}:\n\n"
+                "🔔 No items found today.\n"
+                "💡 Keep your favorites list updated for better results!",
+            )
+            return
+
+        total_value = sum(notif["item"]["value"] for notif in today_notifications)
+        categories = {}
+        best_find = max(today_notifications, key=lambda x: x["item"]["value"])
+
+        for notification in today_notifications:
+            category = notification["item"]["category"]
+            categories[category] = categories.get(category, 0) + 1
+
+        message = f"📊 Daily Summary for {now.strftime('%Y-%m-%d')}:\n\n"
+        message += f"🔔 Items found: {len(today_notifications)}\n"
+        message += f"💰 Total value: {format_value(total_value)}\n"
+        message += f"📈 Average value: {format_value(total_value / len(today_notifications))}\n"
+        message += f"💎 Best find: {best_find['item']['display_name']} ({format_value(best_find['item']['value'])})\n\n"
+
+        message += "📋 By category:\n"
+        for category, count in categories.items():
+            emoji = get_category_emoji(category)
+            message += f"{emoji} {category.title()}: {count} item(s)\n"
+
+        send_message_func(sender_id, message)
+        return
+
+    elif action == "settings":
+        prefs = get_user_preferences(sender_id)
+        priority_str = (
+            ", ".join(prefs["priority_categories"])
+            if prefs["priority_categories"]
+            else "All"
+        )
+        cooldown_min = prefs["notification_cooldown"] // 60
+        cooldown_sec = prefs["notification_cooldown"] % 60
+        cooldown_str = (
+            f"{cooldown_min}m {cooldown_sec}s"
+            if cooldown_min > 0
+            else f"{cooldown_sec}s"
+        )
+
+        send_message_func(
+            sender_id,
+            "⚙️ Your Gagstockfav Settings:\n\n"
+            f"🎯 Smart notifications: {'ON' if prefs['smart_notifications'] else 'OFF'}\n"
+            f"📊 Compact notifications: {'ON' if prefs['compact_notifications'] else 'OFF'}\n"
+            f"📈 Show price trends: {'ON' if prefs['show_price_trends'] else 'OFF'}\n"
+            f"💰 Value threshold: {format_value(prefs['value_threshold'])}\n"
+            f"⏰ Notification cooldown: {cooldown_str}\n"
+            f"🎯 Priority categories: {priority_str}\n"
+            f"🔔 Alert sound: {'ON' if prefs['alert_sound'] else 'OFF'}\n"
+            f"📅 Daily summary: {'ON' if prefs['daily_summary'] else 'OFF'}\n\n"
+            "💡 Commands to change settings:\n"
+            "• 'gagstockfav smart' - Toggle smart notifications\n"
+            "• 'gagstockfav compact' - Toggle compact mode\n"
+            "• 'gagstockfav trends' - Toggle price trends\n"
+            "• 'gagstockfav threshold value' - Set value threshold\n"
+            "• 'gagstockfav cooldown seconds' - Set cooldown time\n"
+            "• 'gagstockfav priority categories' - Set priority categories",
+        )
+        return
+
+    elif action == "test":
+        if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
+            send_message_func(
+                sender_id,
+                "⚠️ You need to add favorite items first to test.\n"
+                "💡 Use 'gagstock add category/item_name' to add items.",
+            )
+            return
+
+        try:
+            headers = {"User-Agent": "GagStock-Bot/1.0"}
+            stock_response = requests.get(
+                "https://vmi2625091.contaboserver.net/api/stocks",
+                timeout=15,
+                headers=headers,
+            )
+
+            if stock_response.status_code == 200:
+                stock_data = stock_response.json()
+                tracked_in_stock = check_tracked_items_in_stock(sender_id, stock_data)
+
+                if tracked_in_stock:
+                    message = f"🧪 Test Results - Found {len(tracked_in_stock)} favorite item(s):\n\n"
+                    for item in tracked_in_stock:
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        trend = get_price_trend(item["display_name"], item["category"])
+                        message += f"✅ {emoji_part}{item['display_name']}: {format_value(item['value'])} | {trend}\n"
+
+                    total_value = sum(item["value"] for item in tracked_in_stock)
+                    message += (
+                        f"\n💰 Total value available: {format_value(total_value)}"
+                    )
+                else:
+                    message = "🧪 Test Results:\n\n❌ None of your favorite items are currently in stock.\n💡 Keep tracking - items restock regularly!"
+
+                send_message_func(sender_id, message)
+            else:
+                send_message_func(
+                    sender_id, "❌ Failed to fetch stock data for testing."
+                )
+        except Exception as e:
+            logger.error(f"Error in test command: {e}")
+            send_message_func(sender_id, "❌ Error occurred during test.")
+        return
+
+    elif action == "recommend":
+        try:
+            headers = {"User-Agent": "GagStock-Bot/1.0"}
+            stock_response = requests.get(
+                "https://vmi2625091.contaboserver.net/api/stocks",
+                timeout=15,
+                headers=headers,
+            )
+
+            if stock_response.status_code == 200:
+                stock_data = stock_response.json()
+                recommendations = get_smart_recommendations(sender_id, stock_data)
+
+                if recommendations:
+                    message = "💡 Smart Recommendations based on your preferences:\n\n"
+                    for i, item in enumerate(recommendations, 1):
+                        emoji_part = f"{item['emoji']} " if item["emoji"] else ""
+                        category_emoji = get_category_emoji(item["category"])
+                        trend = get_price_trend(item["display_name"], item["category"])
+
+                        rarity = ""
+                        if item["value"] >= 10000:
+                            rarity = " 💎"
+                        elif item["value"] >= 1000:
+                            rarity = " ⭐"
+                        elif item["value"] >= 100:
+                            rarity = " 🔥"
+
+                        message += f"{i}. {category_emoji} {emoji_part}{item['display_name']}\n"
+                        message += (
+                            f"   💰 {format_value(item['value'])}{rarity} | {trend}\n\n"
+                        )
+
+                    message += "💡 Add to favorites: 'gagstock add category/item_name'"
+                else:
+                    message = "💡 No smart recommendations available right now.\n\n"
+                    if (
+                        sender_id not in user_tracked_items
+                        or not user_tracked_items[sender_id]
+                    ):
+                        message += "Add some favorite items first to get better recommendations!"
+                    else:
+                        message += "Try expanding your favorite categories for more recommendations."
+
+                send_message_func(sender_id, message)
+            else:
+                send_message_func(
+                    sender_id, "❌ Failed to fetch stock data for recommendations."
+                )
+        except Exception as e:
+            logger.error(f"Error in recommend command: {e}")
+            send_message_func(
+                sender_id, "❌ Error occurred while getting recommendations."
+            )
+        return
+
     else:
         send_message_func(
             sender_id,
-            "❌ Unknown gagstockfav command.\n"
-            "💡 Use 'gagstockfav on' or 'gagstockfav off'\n"
-            "💡 Use 'gagstockfav' without arguments for help",
+            "❌ Unknown gagstockfav command.\n\n"
+            "🔍 Popular commands:\n"
+            "• 'gagstockfav on/off' - Start/stop tracking\n"
+            "• 'gagstockfav settings' - View all settings\n"
+            "• 'gagstockfav stats' - View your statistics\n"
+            "• 'gagstockfav test' - Test with current stock\n\n"
+            "💡 Use 'gagstockfav' without arguments for full help",
         )
