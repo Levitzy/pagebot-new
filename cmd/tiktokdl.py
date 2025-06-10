@@ -66,7 +66,7 @@ class TikTokScraper:
 
         url = unquote(url)
 
-        # Remove watermark parameters
+        # Remove watermark and problematic parameters
         watermark_replacements = [
             ("watermark=1", "watermark=0"),
             ("/watermark/", "/nowatermark/"),
@@ -100,6 +100,8 @@ class TikTokScraper:
             "_nc_ohc=",
             "oh=",
             "oe=",
+            "token=",
+            "auth=",
         ]
 
         try:
@@ -115,12 +117,12 @@ class TikTokScraper:
                         if param in key.lower():
                             should_keep = False
                             break
-                    if should_keep:
-                        cleaned_params[key] = values
+                    if should_keep and values:
+                        cleaned_params[key] = values[0]
 
                 if cleaned_params:
                     new_query = "&".join(
-                        [f"{k}={v[0]}" for k, v in cleaned_params.items() if v]
+                        [f"{k}={v}" for k, v in cleaned_params.items()]
                     )
                     clean_url = (
                         f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{new_query}"
@@ -144,13 +146,8 @@ class TikTokScraper:
 
     def get_video_data_from_api(self, video_id: str) -> Optional[Dict]:
         try:
-            # Try multiple TikTok API endpoints
-            api_endpoints = [
-                "https://api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/",
-                "https://api19-normal-c-useast1a.tiktokv.com/aweme/v1/feed/",
-                "https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/",
-            ]
-
+            # Try primary TikTok API
+            api_url = "https://api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/"
             params = {
                 "aweme_id": video_id,
                 "version_name": "26.2.0",
@@ -178,22 +175,18 @@ class TikTokScraper:
                 "Accept-Encoding": "gzip, deflate",
             }
 
-            for api_url in api_endpoints:
-                try:
-                    response = self.session.get(
-                        api_url, params=params, headers=headers, timeout=15
-                    )
+            response = self.session.get(
+                api_url, params=params, headers=headers, timeout=15
+            )
 
-                    if response.status_code == 200:
-                        try:
-                            data = response.json()
-                            if data and "aweme_list" in data and data["aweme_list"]:
-                                aweme = data["aweme_list"][0]
-                                return self.extract_video_info_from_api(aweme)
-                        except json.JSONDecodeError:
-                            continue
-                except:
-                    continue
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if data and "aweme_list" in data and data["aweme_list"]:
+                        aweme = data["aweme_list"][0]
+                        return self.extract_video_info_from_api(aweme)
+                except json.JSONDecodeError:
+                    pass
 
         except Exception as e:
             pass
@@ -210,16 +203,16 @@ class TikTokScraper:
             no_watermark_url = None
             preview_url = None
 
-            # Get download URL (no watermark)
-            if download_addr.get("url_list"):
-                no_watermark_url = download_addr["url_list"][0]
-
-            # Get play URL (watermark)
+            # Get watermark URL (usually smaller/more compatible)
             if play_addr.get("url_list"):
                 watermark_url = play_addr["url_list"][0]
                 preview_url = watermark_url
 
-            # Try bit rate versions for better quality
+            # Get no watermark URL
+            if download_addr.get("url_list"):
+                no_watermark_url = download_addr["url_list"][0]
+
+            # Try bit rate versions for different qualities
             if bit_rate:
                 for quality in sorted(
                     bit_rate, key=lambda x: x.get("bit_rate", 0), reverse=True
@@ -273,16 +266,13 @@ class TikTokScraper:
                 "Accept-Encoding": "gzip, deflate",
                 "Cache-Control": "no-cache",
                 "Pragma": "no-cache",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
             }
 
             response = self.session.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             html_content = response.text
 
-            # Enhanced script patterns for better extraction
+            # Script patterns for video extraction
             script_patterns = [
                 r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">(.*?)</script>',
                 r'<script id="SIGI_STATE" type="application/json">(.*?)</script>',
@@ -290,7 +280,6 @@ class TikTokScraper:
                 r"window\.__INITIAL_STATE__\s*=\s*({.*?});",
                 r"window\.__DATA__\s*=\s*({.*?});",
                 r'window\["SIGI_STATE"\]\s*=\s*({.*?});',
-                r"window\.__NUXT__\s*=\s*({.*?});",
             ]
 
             for pattern in script_patterns:
@@ -306,7 +295,7 @@ class TikTokScraper:
                     except Exception as e:
                         continue
 
-            # Enhanced video URL patterns
+            # Direct video URL patterns
             video_url_patterns = [
                 r'"downloadAddr":"([^"]+)"',
                 r'"playAddr":"([^"]+)"',
@@ -314,10 +303,6 @@ class TikTokScraper:
                 r'"play_addr":\s*{\s*"url_list":\s*\[\s*"([^"]+)"',
                 r'downloadAddr["\s]*:\s*["\s]*([^"]+)',
                 r'playAddr["\s]*:\s*["\s]*([^"]+)',
-                r'"downloadApi":"([^"]+)"',
-                r'"playApi":"([^"]+)"',
-                r'"video":\s*{\s*"downloadAddr":\s*"([^"]+)"',
-                r'"video":\s*{\s*"playAddr":\s*"([^"]+)"',
             ]
 
             for pattern in video_url_patterns:
@@ -337,8 +322,10 @@ class TikTokScraper:
                     author_match = re.search(r'"nickname":"([^"]+)"', html_content)
 
                     return {
-                        "video_url_no_watermark": video_url,
-                        "video_url_watermark": video_url,
+                        "video_url_no_watermark": (
+                            video_url if "download" in pattern else None
+                        ),
+                        "video_url_watermark": video_url if "play" in pattern else None,
                         "video_preview_url": video_url,
                         "title": (
                             title_match.group(1) if title_match else "TikTok Video"
@@ -357,7 +344,6 @@ class TikTokScraper:
 
     def parse_json_data(self, data: Dict) -> Optional[Dict]:
         try:
-            # Enhanced parsing patterns
             patterns = [
                 lambda d: d["__DEFAULT_SCOPE__"]["webapp.video-detail"]["itemInfo"][
                     "itemStruct"
@@ -366,10 +352,6 @@ class TikTokScraper:
                     next(k for k in d["ItemModule"].keys() if k.isdigit())
                 ],
                 lambda d: d["props"]["pageProps"]["itemInfo"]["itemStruct"],
-                lambda d: d["webapp.video-detail"]["itemInfo"]["itemStruct"],
-                lambda d: d["ItemList"][
-                    next(k for k in d["ItemList"].keys() if k.isdigit())
-                ],
             ]
 
             for pattern in patterns:
@@ -520,103 +502,11 @@ def execute(sender_id, args, context):
         try:
             from functions.sendAttachment import send_video_attachment
         except ImportError:
-            # Enhanced fallback method
-            def send_video_attachment(recipient_id, video_url):
-                try:
-                    import json
-
-                    with open("config.json", "r") as f:
-                        config = json.load(f)
-
-                    PAGE_ACCESS_TOKEN = config["page_access_token"]
-                    GRAPH_API_VERSION = config["graph_api_version"]
-
-                    # Try upload method first
-                    try:
-                        upload_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/message_attachments"
-                        upload_params = {"access_token": PAGE_ACCESS_TOKEN}
-                        upload_data = {
-                            "message": json.dumps(
-                                {
-                                    "attachment": {
-                                        "type": "video",
-                                        "payload": {"is_reusable": False},
-                                    }
-                                }
-                            )
-                        }
-
-                        # Download video first
-                        video_response = requests.get(video_url, timeout=30)
-                        if video_response.status_code == 200:
-                            files = {
-                                "filedata": (
-                                    "video.mp4",
-                                    video_response.content,
-                                    "video/mp4",
-                                )
-                            }
-                            upload_response = requests.post(
-                                upload_url,
-                                params=upload_params,
-                                data=upload_data,
-                                files=files,
-                                timeout=120,
-                            )
-
-                            if upload_response.status_code == 200:
-                                upload_result = upload_response.json()
-                                attachment_id = upload_result.get("attachment_id")
-
-                                if attachment_id:
-                                    # Send using attachment ID
-                                    params = {"access_token": PAGE_ACCESS_TOKEN}
-                                    headers = {"Content-Type": "application/json"}
-                                    data = {
-                                        "recipient": {"id": recipient_id},
-                                        "message": {
-                                            "attachment": {
-                                                "type": "video",
-                                                "payload": {
-                                                    "attachment_id": attachment_id
-                                                },
-                                            }
-                                        },
-                                    }
-
-                                    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-                                    response = requests.post(
-                                        url,
-                                        params=params,
-                                        headers=headers,
-                                        json=data,
-                                        timeout=60,
-                                    )
-                                    return response.json()
-                    except Exception as upload_error:
-                        pass
-
-                    # Fallback to URL method with cleaned URL
-                    params = {"access_token": PAGE_ACCESS_TOKEN}
-                    headers = {"Content-Type": "application/json"}
-                    data = {
-                        "recipient": {"id": recipient_id},
-                        "message": {
-                            "attachment": {
-                                "type": "video",
-                                "payload": {"url": video_url, "is_reusable": False},
-                            }
-                        },
-                    }
-
-                    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-                    response = requests.post(
-                        url, params=params, headers=headers, json=data, timeout=60
-                    )
-                    return response.json()
-
-                except Exception as e:
-                    return {"error": str(e)}
+            send_message_func(
+                sender_id,
+                "❌ Video sending system not available. Please check server configuration.",
+            )
+            return
 
         scraper = TikTokScraper()
         video_data = scraper.get_video_data(url)
@@ -640,72 +530,99 @@ def execute(sender_id, args, context):
 
         send_message_func(sender_id, info_message)
 
-        # Try no watermark first, then watermark version
-        video_urls_to_try = []
-        if video_url_no_watermark:
-            video_urls_to_try.append(("no watermark", video_url_no_watermark))
-        if video_url_watermark and video_url_watermark != video_url_no_watermark:
-            video_urls_to_try.append(("watermark", video_url_watermark))
+        # SMART QUALITY SELECTION - NO SPAM
+        # Try watermark version first (usually smaller and more compatible)
+        video_url_to_try = None
+        quality_name = ""
 
-        if video_urls_to_try:
+        if video_url_watermark:
+            video_url_to_try = video_url_watermark
+            quality_name = "Standard"
+        elif video_url_no_watermark:
+            video_url_to_try = video_url_no_watermark
+            quality_name = "No Watermark"
+
+        if video_url_to_try:
             send_typing_indicator(sender_id, True)
+            send_message_func(
+                sender_id, f"📤 Uploading video ({quality_name} quality)..."
+            )
 
-            for quality_name, video_url in video_urls_to_try:
-                send_message_func(
-                    sender_id, f"📤 Sending video ({quality_name} version)..."
-                )
+            result = send_video_attachment(sender_id, video_url_to_try)
 
-                result = send_video_attachment(sender_id, video_url)
+            if result and result.get("message_id"):
+                send_message_func(sender_id, "✅ Video sent successfully!")
+            elif result and "error" in result:
+                error_msg = result["error"]
 
-                if result and result.get("message_id"):
+                # If watermark version failed and we have no-watermark, try it
+                if (
+                    video_url_to_try == video_url_watermark
+                    and video_url_no_watermark
+                    and video_url_no_watermark != video_url_watermark
+                ):
                     send_message_func(
                         sender_id,
-                        f"✅ Video sent successfully ({quality_name} version)!",
+                        "⚠️ Standard quality failed, trying no-watermark version...",
                     )
-                    break
-                elif result and "error" in result:
-                    error_msg = result["error"]
-                    if "too large" in error_msg.lower():
+
+                    result2 = send_video_attachment(sender_id, video_url_no_watermark)
+
+                    if result2 and result2.get("message_id"):
                         send_message_func(
-                            sender_id,
-                            f"⚠️ {quality_name.title()} version too large, trying next quality...",
+                            sender_id, "✅ Video sent successfully (no watermark)!"
                         )
-                        continue
-                    elif "timeout" in error_msg.lower():
-                        send_message_func(
-                            sender_id,
-                            f"⏰ Upload timeout for {quality_name} version, trying next...",
-                        )
-                        continue
-                    elif len(video_urls_to_try) == 1:  # Only one URL to try
-                        if "400" in str(error_msg):
+                    else:
+                        # Both failed
+                        if "too large" in error_msg.lower():
                             send_message_func(
                                 sender_id,
-                                "❌ Video format not supported by Facebook. Try a different TikTok video.",
+                                "❌ Video is too large to send (>20MB). Please try a shorter TikTok video.",
+                            )
+                        elif "timeout" in error_msg.lower():
+                            send_message_func(
+                                sender_id,
+                                "⏰ Upload timeout. The video might be too large or connection is slow.",
+                            )
+                        elif "download" in error_msg.lower():
+                            send_message_func(
+                                sender_id,
+                                "❌ Failed to download video. The video might be private or region-restricted.",
                             )
                         else:
                             send_message_func(
                                 sender_id, f"❌ Failed to send video: {error_msg}"
                             )
-                        break
                 else:
-                    if len(video_urls_to_try) == 1:  # Only one URL to try
+                    # Single attempt failed
+                    if "too large" in error_msg.lower():
                         send_message_func(
                             sender_id,
-                            "❌ Failed to send video. The video might be private or unavailable.",
+                            "❌ Video is too large to send (>20MB). Please try a shorter TikTok video.",
                         )
-                        break
+                    elif "timeout" in error_msg.lower():
+                        send_message_func(
+                            sender_id,
+                            "⏰ Upload timeout. The video might be too large or connection is slow.",
+                        )
+                    elif "download" in error_msg.lower():
+                        send_message_func(
+                            sender_id,
+                            "❌ Failed to download video. The video might be private or region-restricted.",
+                        )
+                    elif "400" in str(error_msg):
+                        send_message_func(
+                            sender_id,
+                            "❌ Video format not supported by Facebook. Try a different TikTok video.",
+                        )
                     else:
                         send_message_func(
-                            sender_id,
-                            f"⚠️ {quality_name.title()} version failed, trying next...",
+                            sender_id, f"❌ Failed to send video: {error_msg}"
                         )
-                        continue
             else:
-                # All URLs failed
                 send_message_func(
                     sender_id,
-                    "❌ Failed to send video in any quality. The video might be private, too large, or in an unsupported format.",
+                    "❌ Failed to send video. The video might be private or unavailable.",
                 )
         else:
             send_message_func(sender_id, "❌ No video URL found for sending.")
@@ -714,4 +631,3 @@ def execute(sender_id, args, context):
         send_message_func(sender_id, f"❌ An unexpected error occurred: {str(e)}")
     finally:
         send_typing_indicator(sender_id, False)
-    
