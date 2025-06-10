@@ -538,41 +538,6 @@ def send_typing_indicator(recipient_id, typing_on=True):
         return None
 
 
-def send_video_attachment(recipient_id, video_url):
-    try:
-        import json
-
-        with open("config.json", "r") as f:
-            config = json.load(f)
-
-        PAGE_ACCESS_TOKEN = config["page_access_token"]
-        GRAPH_API_VERSION = config["graph_api_version"]
-
-        if not PAGE_ACCESS_TOKEN:
-            return None
-
-        params = {"access_token": PAGE_ACCESS_TOKEN}
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "recipient": {"id": recipient_id},
-            "message": {
-                "attachment": {
-                    "type": "video",
-                    "payload": {"url": video_url, "is_reusable": False},
-                }
-            },
-        }
-
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-
-        response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=60
-        )
-        return response.json()
-    except Exception as e:
-        return None
-
-
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
@@ -593,6 +558,47 @@ def execute(sender_id, args, context):
     send_message_func(sender_id, "🔄 Processing Facebook video... Please wait.")
 
     try:
+        # Import the new attachment function
+        import sys
+        import os
+
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        try:
+            from functions.sendAttachment import send_video_attachment
+        except ImportError:
+            # Fallback to old method if new function not available
+            def send_video_attachment(recipient_id, video_url):
+                try:
+                    import json
+
+                    with open("config.json", "r") as f:
+                        config = json.load(f)
+
+                    PAGE_ACCESS_TOKEN = config["page_access_token"]
+                    GRAPH_API_VERSION = config["graph_api_version"]
+
+                    params = {"access_token": PAGE_ACCESS_TOKEN}
+                    headers = {"Content-Type": "application/json"}
+                    data = {
+                        "recipient": {"id": recipient_id},
+                        "message": {
+                            "attachment": {
+                                "type": "video",
+                                "payload": {"url": video_url, "is_reusable": False},
+                            }
+                        },
+                    }
+
+                    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
+
+                    response = requests.post(
+                        url, params=params, headers=headers, json=data, timeout=60
+                    )
+                    return response.json()
+                except Exception as e:
+                    return {"error": str(e)}
+
         downloader = FacebookVideoDownloader()
         video_data = downloader.get_video_data(url)
 
@@ -625,21 +631,58 @@ def execute(sender_id, args, context):
 
             if video_url_hd:
                 quality_msg = "HD quality"
+                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
             elif video_url_sd:
                 quality_msg = "SD quality"
+                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
             else:
                 quality_msg = "best available quality"
-
-            send_message_func(sender_id, f"📤 Sending video in {quality_msg}...")
+                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
 
             result = send_video_attachment(sender_id, video_url_to_send)
 
             if result and result.get("message_id"):
                 send_message_func(sender_id, "✅ Video sent successfully!")
+            elif result and "error" in result:
+                error_msg = result["error"]
+                if "too large" in error_msg.lower():
+                    # Try lower quality if available
+                    if quality_options and len(quality_options) > 1:
+                        send_message_func(
+                            sender_id,
+                            "⚠️ HD/SD quality too large, trying lower quality...",
+                        )
+                        for option in quality_options[1:]:
+                            if option["size_mb"] < 25:  # Try smaller videos
+                                result = send_video_attachment(sender_id, option["url"])
+                                if result and result.get("message_id"):
+                                    send_message_func(
+                                        sender_id,
+                                        f"✅ Video sent in {option['quality']} quality!",
+                                    )
+                                    break
+                        else:
+                            send_message_func(
+                                sender_id,
+                                "❌ Video is too large to send. All available qualities exceed size limit.",
+                            )
+                    else:
+                        send_message_func(sender_id, "❌ Video is too large to send.")
+                elif "timeout" in error_msg.lower():
+                    send_message_func(
+                        sender_id,
+                        "⏰ Upload timeout. The video might be too large or connection is slow.",
+                    )
+                else:
+                    send_message_func(
+                        sender_id, f"❌ Failed to send video: {error_msg}"
+                    )
             else:
+                # Try alternative qualities
                 if quality_options and len(quality_options) > 1:
                     send_message_func(
-                        sender_id, "⚠️ HD quality failed, trying lower quality..."
+                        sender_id,
+                        "⚠️ Primary quality failed, trying alternative qualities...",
                     )
                     for option in quality_options[1:]:
                         result = send_video_attachment(sender_id, option["url"])
@@ -652,7 +695,7 @@ def execute(sender_id, args, context):
                     else:
                         send_message_func(
                             sender_id,
-                            "❌ Failed to send video. The video might be too large or unavailable.",
+                            "❌ Failed to send video in any quality. The video might be unavailable or corrupted.",
                         )
                 else:
                     send_message_func(

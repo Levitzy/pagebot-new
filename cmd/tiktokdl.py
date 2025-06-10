@@ -434,41 +434,6 @@ def send_typing_indicator(recipient_id, typing_on=True):
         return None
 
 
-def send_video_attachment(recipient_id, video_url):
-    try:
-        import json
-
-        with open("config.json", "r") as f:
-            config = json.load(f)
-
-        PAGE_ACCESS_TOKEN = config["page_access_token"]
-        GRAPH_API_VERSION = config["graph_api_version"]
-
-        if not PAGE_ACCESS_TOKEN:
-            return None
-
-        params = {"access_token": PAGE_ACCESS_TOKEN}
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "recipient": {"id": recipient_id},
-            "message": {
-                "attachment": {
-                    "type": "video",
-                    "payload": {"url": video_url, "is_reusable": False},
-                }
-            },
-        }
-
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-
-        response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=60
-        )
-        return response.json()
-    except Exception as e:
-        return None
-
-
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
@@ -493,6 +458,47 @@ def execute(sender_id, args, context):
     send_message_func(sender_id, "🔄 Processing TikTok video... Please wait.")
 
     try:
+        # Import the new attachment function
+        import sys
+        import os
+
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        try:
+            from functions.sendAttachment import send_video_attachment
+        except ImportError:
+            # Fallback to old method if new function not available
+            def send_video_attachment(recipient_id, video_url):
+                try:
+                    import json
+
+                    with open("config.json", "r") as f:
+                        config = json.load(f)
+
+                    PAGE_ACCESS_TOKEN = config["page_access_token"]
+                    GRAPH_API_VERSION = config["graph_api_version"]
+
+                    params = {"access_token": PAGE_ACCESS_TOKEN}
+                    headers = {"Content-Type": "application/json"}
+                    data = {
+                        "recipient": {"id": recipient_id},
+                        "message": {
+                            "attachment": {
+                                "type": "video",
+                                "payload": {"url": video_url, "is_reusable": False},
+                            }
+                        },
+                    }
+
+                    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
+
+                    response = requests.post(
+                        url, params=params, headers=headers, json=data, timeout=60
+                    )
+                    return response.json()
+                except Exception as e:
+                    return {"error": str(e)}
+
         scraper = TikTokScraper()
         video_data = scraper.get_video_data(url)
 
@@ -519,10 +525,38 @@ def execute(sender_id, args, context):
 
         if video_url_to_send:
             send_typing_indicator(sender_id, True)
+            send_message_func(sender_id, "📤 Uploading video...")
+
             result = send_video_attachment(sender_id, video_url_to_send)
 
             if result and result.get("message_id"):
                 send_message_func(sender_id, "✅ Video sent successfully!")
+            elif result and "error" in result:
+                error_msg = result["error"]
+                if "too large" in error_msg.lower():
+                    send_message_func(
+                        sender_id,
+                        "❌ Video is too large to send. Please try a shorter video.",
+                    )
+                elif "timeout" in error_msg.lower():
+                    send_message_func(
+                        sender_id,
+                        "⏰ Upload timeout. The video might be too large or connection is slow.",
+                    )
+                elif "download" in error_msg.lower():
+                    send_message_func(
+                        sender_id,
+                        "❌ Failed to download video. The video might be private or unavailable.",
+                    )
+                elif "upload" in error_msg.lower():
+                    send_message_func(
+                        sender_id,
+                        "❌ Failed to upload video to Facebook. Please try again later.",
+                    )
+                else:
+                    send_message_func(
+                        sender_id, f"❌ Failed to send video: {error_msg}"
+                    )
             else:
                 send_message_func(
                     sender_id,
