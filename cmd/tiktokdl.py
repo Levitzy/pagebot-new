@@ -434,7 +434,7 @@ def send_typing_indicator(recipient_id, typing_on=True):
         return None
 
 
-def send_button_template(recipient_id, text, buttons):
+def send_video_attachment(recipient_id, video_url):
     try:
         import json
 
@@ -447,46 +447,26 @@ def send_button_template(recipient_id, text, buttons):
         if not PAGE_ACCESS_TOKEN:
             return None
 
-        if not text or not buttons or not isinstance(buttons, list):
-            return None
-
-        if len(buttons) > 3:
-            buttons = buttons[:3]
-
-        if len(text) > 640:
-            text = text[:637] + "..."
-
-        template_payload = {"template_type": "button", "text": text, "buttons": buttons}
-
         params = {"access_token": PAGE_ACCESS_TOKEN}
         headers = {"Content-Type": "application/json"}
         data = {
             "recipient": {"id": recipient_id},
             "message": {
-                "attachment": {"type": "template", "payload": template_payload}
+                "attachment": {
+                    "type": "video",
+                    "payload": {"url": video_url, "is_reusable": False},
+                }
             },
         }
 
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
 
         response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=30
+            url, params=params, headers=headers, json=data, timeout=60
         )
         return response.json()
     except Exception as e:
         return None
-
-
-def create_url_button(title, url, webview_height_ratio="tall"):
-    if len(title) > 20:
-        title = title[:20]
-
-    return {
-        "type": "web_url",
-        "title": title,
-        "url": url,
-        "webview_height_ratio": webview_height_ratio,
-    }
 
 
 def execute(sender_id, args, context):
@@ -531,30 +511,25 @@ def execute(sender_id, args, context):
         info_message += f"📝 Title: {title}\n"
         info_message += f"👤 Author: @{author}\n"
         info_message += f"⏱️ Duration: {duration}\n\n"
+        info_message += "📹 Sending video..."
 
-        if video_url_no_watermark or video_url_watermark:
-            info_message += "Choose download option:"
+        send_message_func(sender_id, info_message)
 
-            buttons = []
+        video_url_to_send = video_url_no_watermark or video_url_watermark
 
-            if video_url_no_watermark:
-                buttons.append(
-                    create_url_button("No Watermark", video_url_no_watermark)
-                )
+        if video_url_to_send:
+            send_typing_indicator(sender_id, True)
+            result = send_video_attachment(sender_id, video_url_to_send)
 
-            if video_url_watermark and video_url_watermark != video_url_no_watermark:
-                buttons.append(create_url_button("With Watermark", video_url_watermark))
-
-            if len(buttons) > 0:
-                send_button_template(sender_id, info_message, buttons)
+            if result and result.get("message_id"):
+                send_message_func(sender_id, "✅ Video sent successfully!")
             else:
                 send_message_func(
-                    sender_id, info_message + "\n\n❌ No download links available."
+                    sender_id,
+                    "❌ Failed to send video. The video might be too large or unavailable.",
                 )
         else:
-            send_message_func(
-                sender_id, info_message + "\n\n❌ No download links found."
-            )
+            send_message_func(sender_id, "❌ No video URL found for sending.")
 
     except Exception as e:
         send_message_func(sender_id, f"❌ An unexpected error occurred: {str(e)}")

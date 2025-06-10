@@ -538,7 +538,7 @@ def send_typing_indicator(recipient_id, typing_on=True):
         return None
 
 
-def send_button_template(recipient_id, text, buttons):
+def send_video_attachment(recipient_id, video_url):
     try:
         import json
 
@@ -551,86 +551,26 @@ def send_button_template(recipient_id, text, buttons):
         if not PAGE_ACCESS_TOKEN:
             return None
 
-        if not text or not buttons or not isinstance(buttons, list):
-            return None
-
-        if len(buttons) > 3:
-            buttons = buttons[:3]
-
-        if len(text) > 640:
-            text = text[:637] + "..."
-
-        template_payload = {"template_type": "button", "text": text, "buttons": buttons}
-
         params = {"access_token": PAGE_ACCESS_TOKEN}
         headers = {"Content-Type": "application/json"}
         data = {
             "recipient": {"id": recipient_id},
             "message": {
-                "attachment": {"type": "template", "payload": template_payload}
+                "attachment": {
+                    "type": "video",
+                    "payload": {"url": video_url, "is_reusable": False},
+                }
             },
         }
 
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
 
         response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=30
+            url, params=params, headers=headers, json=data, timeout=60
         )
         return response.json()
     except Exception as e:
         return None
-
-
-def send_generic_template(recipient_id, elements):
-    try:
-        import json
-
-        with open("config.json", "r") as f:
-            config = json.load(f)
-
-        PAGE_ACCESS_TOKEN = config["page_access_token"]
-        GRAPH_API_VERSION = config["graph_api_version"]
-
-        if not PAGE_ACCESS_TOKEN:
-            return None
-
-        if not elements or not isinstance(elements, list):
-            return None
-
-        if len(elements) > 10:
-            elements = elements[:10]
-
-        template_payload = {"template_type": "generic", "elements": elements}
-
-        params = {"access_token": PAGE_ACCESS_TOKEN}
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "recipient": {"id": recipient_id},
-            "message": {
-                "attachment": {"type": "template", "payload": template_payload}
-            },
-        }
-
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-
-        response = requests.post(
-            url, params=params, headers=headers, json=data, timeout=30
-        )
-        return response.json()
-    except Exception as e:
-        return None
-
-
-def create_url_button(title, url, webview_height_ratio="tall"):
-    if len(title) > 20:
-        title = title[:20]
-
-    return {
-        "type": "web_url",
-        "title": title,
-        "url": url,
-        "webview_height_ratio": webview_height_ratio,
-    }
 
 
 def execute(sender_id, args, context):
@@ -674,48 +614,53 @@ def execute(sender_id, args, context):
         info_message += f"📝 Title: {title}\n"
         info_message += f"👤 Author: {author}\n"
         info_message += f"⏱️ Duration: {duration}\n\n"
+        info_message += "📹 Sending video..."
 
-        available_urls = []
-        if video_url_hd:
-            available_urls.append(("HD Quality", video_url_hd))
-        if video_url_sd and video_url_sd != video_url_hd:
-            available_urls.append(("SD Quality", video_url_sd))
-        if video_url_auto and video_url_auto not in [video_url_hd, video_url_sd]:
-            available_urls.append(("Auto Quality", video_url_auto))
+        send_message_func(sender_id, info_message)
 
-        if quality_options and len(quality_options) > len(available_urls):
-            for option in quality_options[:3]:
-                quality_label = f"{option['quality']} ({option['size_mb']:.1f}MB)"
-                if option["url"] not in [url for _, url in available_urls]:
-                    available_urls.append((quality_label, option["url"]))
+        video_url_to_send = video_url_hd or video_url_sd or video_url_auto
 
-        if available_urls:
-            if len(available_urls) <= 3:
-                info_message += "Choose download quality:"
-                buttons = []
-                for label, download_url in available_urls:
-                    buttons.append(create_url_button(label, download_url))
-                send_button_template(sender_id, info_message, buttons)
+        if video_url_to_send:
+            send_typing_indicator(sender_id, True)
+
+            if video_url_hd:
+                quality_msg = "HD quality"
+            elif video_url_sd:
+                quality_msg = "SD quality"
             else:
-                elements = []
-                element = {
-                    "title": title[:80],
-                    "subtitle": f"By {author} • {duration}",
-                    "buttons": [],
-                }
+                quality_msg = "best available quality"
 
-                if thumbnail:
-                    element["image_url"] = thumbnail
+            send_message_func(sender_id, f"📤 Sending video in {quality_msg}...")
 
-                for i, (label, download_url) in enumerate(available_urls[:3]):
-                    element["buttons"].append(create_url_button(label, download_url))
+            result = send_video_attachment(sender_id, video_url_to_send)
 
-                elements.append(element)
-                send_generic_template(sender_id, elements)
+            if result and result.get("message_id"):
+                send_message_func(sender_id, "✅ Video sent successfully!")
+            else:
+                if quality_options and len(quality_options) > 1:
+                    send_message_func(
+                        sender_id, "⚠️ HD quality failed, trying lower quality..."
+                    )
+                    for option in quality_options[1:]:
+                        result = send_video_attachment(sender_id, option["url"])
+                        if result and result.get("message_id"):
+                            send_message_func(
+                                sender_id,
+                                f"✅ Video sent in {option['quality']} quality!",
+                            )
+                            break
+                    else:
+                        send_message_func(
+                            sender_id,
+                            "❌ Failed to send video. The video might be too large or unavailable.",
+                        )
+                else:
+                    send_message_func(
+                        sender_id,
+                        "❌ Failed to send video. The video might be too large or unavailable.",
+                    )
         else:
-            send_message_func(
-                sender_id, info_message + "\n\n❌ No download links available."
-            )
+            send_message_func(sender_id, "❌ No video URL found for sending.")
 
     except Exception as e:
         send_message_func(sender_id, f"❌ An unexpected error occurred: {str(e)}")
