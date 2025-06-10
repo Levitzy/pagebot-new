@@ -105,6 +105,8 @@ class FacebookVideoDownloader:
                 encoded_url.replace("\\/", "/")
                 .replace("\\u0026", "&")
                 .replace("\\", "")
+                .replace("\\u003d", "=")
+                .replace("\\u003D", "=")
             )
             decoded = html.unescape(decoded)
             decoded = unquote(decoded)
@@ -115,6 +117,7 @@ class FacebookVideoDownloader:
     def extract_video_urls_with_quality(self, html_content):
         video_data = []
 
+        # Enhanced patterns for modern Facebook
         quality_patterns = {
             "hd": [
                 r'"hd_src(?:_no_ratelimit)?":"([^"]+)"',
@@ -125,6 +128,8 @@ class FacebookVideoDownloader:
                 r'"hd_src_no_ratelimit":"([^"]+)"',
                 r'"HD"[^}]*"src":"([^"]+)"',
                 r'"quality":"hd"[^}]*"src":"([^"]+)"',
+                r'"representation":\s*{\s*"__typename":"VideoRepresentation"[^}]*"base_url":"([^"]+)"[^}]*"quality_label":"720p"',
+                r'"representation":\s*{\s*"__typename":"VideoRepresentation"[^}]*"base_url":"([^"]+)"[^}]*"quality_label":"1080p"',
             ],
             "sd": [
                 r'"sd_src(?:_no_ratelimit)?":"([^"]+)"',
@@ -135,11 +140,13 @@ class FacebookVideoDownloader:
                 r'"sd_src_no_ratelimit":"([^"]+)"',
                 r'"SD"[^}]*"src":"([^"]+)"',
                 r'"quality":"sd"[^}]*"src":"([^"]+)"',
+                r'"representation":\s*{\s*"__typename":"VideoRepresentation"[^}]*"base_url":"([^"]+)"[^}]*"quality_label":"480p"',
+                r'"representation":\s*{\s*"__typename":"VideoRepresentation"[^}]*"base_url":"([^"]+)"[^}]*"quality_label":"360p"',
             ],
             "auto": [
                 r'"playable_url":"([^"]+)"',
                 r'"progressive_url":"([^"]+)"',
-                r'"src":"([^"]+mp4[^"]*)"',
+                r'"src":"([^"]+\.mp4[^"]*)"',
                 r'"video_url":"([^"]+)"',
                 r'"videoUrl":"([^"]+)"',
                 r'"video_src":"([^"]+)"',
@@ -148,9 +155,13 @@ class FacebookVideoDownloader:
                 r'"video_progressive_url":"([^"]+)"',
                 r'"playback_url":"([^"]+)"',
                 r'"browser_native_(?:hd|sd)_url":"([^"]+)"',
+                r'"representation":\s*{\s*"__typename":"VideoRepresentation"[^}]*"base_url":"([^"]+)"',
+                r'"video_data":\s*{\s*"video_url":"([^"]+)"',
+                r'"video_attachment":\s*{\s*"video":\s*{\s*"src":"([^"]+)"',
             ],
         }
 
+        # Reel and modern Facebook patterns
         reel_specific_patterns = [
             r'"videoData":\[\"([^"]+)\"\]',
             r'"video_url":"([^"]+)".*?"reel"',
@@ -163,11 +174,28 @@ class FacebookVideoDownloader:
             r'"video_versions":\[.*?"url":"([^"]+)"',
             r'"dash_manifest":"([^"]+)"',
             r'"video_dash_prefetch_representation"[^}]*"base_url":"([^"]+)"',
+            r'"short_form_video_context"[^}]*"video_url":"([^"]+)"',
+            r'"playback_video"[^}]*"__typename":"Video"[^}]*"browser_native_(?:hd|sd)_url":"([^"]+)"',
+            r'"VideoPlayerRelay_video"[^}]*"browser_native_(?:hd|sd)_url":"([^"]+)"',
+            r'"CometVideoPlayer_video"[^}]*"browser_native_(?:hd|sd)_url":"([^"]+)"',
         ]
 
+        # Modern Facebook video extraction patterns
+        modern_patterns = [
+            r'"__typename":"Video"[^}]*"browser_native_hd_url":"([^"]+)"',
+            r'"__typename":"Video"[^}]*"browser_native_sd_url":"([^"]+)"',
+            r'"VideoPlayerRelay_video":\s*{[^}]*"browser_native_hd_url":"([^"]+)"',
+            r'"VideoPlayerRelay_video":\s*{[^}]*"browser_native_sd_url":"([^"]+)"',
+            r'"CometVideoPlayer_video":\s*{[^}]*"browser_native_hd_url":"([^"]+)"',
+            r'"CometVideoPlayer_video":\s*{[^}]*"browser_native_sd_url":"([^"]+)"',
+            r'"playback_video":\s*{[^}]*"browser_native_hd_url":"([^"]+)"',
+            r'"playback_video":\s*{[^}]*"browser_native_sd_url":"([^"]+)"',
+        ]
+
+        # Process quality patterns
         for quality, patterns in quality_patterns.items():
             for pattern in patterns:
-                matches = re.findall(pattern, html_content, re.IGNORECASE)
+                matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
                 for match in matches:
                     decoded_url = self.decode_facebook_url(match)
                     if (
@@ -175,8 +203,10 @@ class FacebookVideoDownloader:
                         and (
                             "video" in decoded_url.lower()
                             or ".mp4" in decoded_url.lower()
+                            or "fbcdn" in decoded_url.lower()
                         )
                         and decoded_url.startswith("http")
+                        and len(decoded_url) > 20
                     ):
                         video_data.append(
                             {
@@ -186,22 +216,52 @@ class FacebookVideoDownloader:
                             }
                         )
 
+        # Process reel patterns
         for pattern in reel_specific_patterns:
-            matches = re.findall(pattern, html_content, re.IGNORECASE)
+            matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
             for match in matches:
                 decoded_url = self.decode_facebook_url(match)
                 if (
                     decoded_url
                     and (
-                        "video" in decoded_url.lower() or ".mp4" in decoded_url.lower()
+                        "video" in decoded_url.lower()
+                        or ".mp4" in decoded_url.lower()
+                        or "fbcdn" in decoded_url.lower()
                     )
                     and decoded_url.startswith("http")
+                    and len(decoded_url) > 20
                 ):
                     video_data.append(
                         {
                             "url": decoded_url,
                             "quality": "auto",
                             "source_pattern": "reel_specific",
+                        }
+                    )
+
+        # Process modern patterns
+        for pattern in modern_patterns:
+            matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                decoded_url = self.decode_facebook_url(match)
+                if (
+                    decoded_url
+                    and (
+                        "video" in decoded_url.lower()
+                        or ".mp4" in decoded_url.lower()
+                        or "fbcdn" in decoded_url.lower()
+                    )
+                    and decoded_url.startswith("http")
+                    and len(decoded_url) > 20
+                ):
+                    quality = (
+                        "hd" if "hd" in pattern else "sd" if "sd" in pattern else "auto"
+                    )
+                    video_data.append(
+                        {
+                            "url": decoded_url,
+                            "quality": quality,
+                            "source_pattern": "modern_facebook",
                         }
                     )
 
@@ -254,6 +314,7 @@ class FacebookVideoDownloader:
             is_reel = "/reel/" in normalized_url
             urls_to_check = [normalized_url]
 
+            # Add mobile versions and different formats
             if is_reel:
                 mobile_reel = normalized_url.replace(
                     "www.facebook.com", "m.facebook.com"
@@ -264,25 +325,62 @@ class FacebookVideoDownloader:
                 if reel_id:
                     story_url = f"https://www.facebook.com/stories/{reel_id}"
                     mobile_story_url = f"https://m.facebook.com/stories/{reel_id}"
-                    urls_to_check.extend([story_url, mobile_story_url])
+                    watch_url = f"https://www.facebook.com/watch/?v={reel_id}"
+                    mobile_watch_url = f"https://m.facebook.com/watch/?v={reel_id}"
+                    urls_to_check.extend(
+                        [story_url, mobile_story_url, watch_url, mobile_watch_url]
+                    )
             else:
                 mobile_url = normalized_url.replace(
                     "www.facebook.com", "m.facebook.com"
                 )
                 urls_to_check.append(mobile_url)
 
+                video_id = self.extract_video_id(normalized_url)
+                if video_id:
+                    # Try different URL formats
+                    watch_url = f"https://www.facebook.com/watch/?v={video_id}"
+                    mobile_watch_url = f"https://m.facebook.com/watch/?v={video_id}"
+                    video_php_url = f"https://www.facebook.com/video.php?v={video_id}"
+                    mobile_video_php_url = (
+                        f"https://m.facebook.com/video.php?v={video_id}"
+                    )
+                    urls_to_check.extend(
+                        [
+                            watch_url,
+                            mobile_watch_url,
+                            video_php_url,
+                            mobile_video_php_url,
+                        ]
+                    )
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_urls = []
             for url in urls_to_check:
+                if url not in seen:
+                    seen.add(url)
+                    unique_urls.append(url)
+
+            for url in unique_urls:
                 try:
-                    response = self.session.get(url, timeout=15, allow_redirects=True)
+                    # Add random delay to avoid rate limiting
+                    time.sleep(random.uniform(0.5, 1.5))
+
+                    response = self.session.get(url, timeout=20, allow_redirects=True)
 
                     if response.status_code == 200:
                         video_data = self.extract_video_urls_with_quality(response.text)
                         all_video_data.extend(video_data)
 
-                    time.sleep(random.uniform(1, 2))
+                        # If we found videos, we can break early
+                        if video_data:
+                            break
+
                 except Exception as e:
                     continue
 
+            # Remove duplicates and prioritize by quality
             unique_videos = {}
             for video in all_video_data:
                 clean_url = (
@@ -353,6 +451,7 @@ class FacebookVideoDownloader:
             r'"name":"([^"]+)".*?"video"',
             r'"attachments"[^}]*"title":"([^"]+)"',
             r'"story_bucket_owner"[^}]*"name":"([^"]+)"',
+            r'"short_form_video_context"[^}]*"title":"([^"]+)"',
         ]
 
         for pattern in title_patterns:
@@ -370,6 +469,7 @@ class FacebookVideoDownloader:
             r'"story_bucket_owner"[^}]*"name":"([^"]+)"',
             r'"creation_story"[^}]*"short_form_video_context"[^}]*"playback_video"[^}]*"owner"[^}]*"name":"([^"]+)"',
             r'"page_info"[^}]*"name":"([^"]+)"',
+            r'"video_owner"[^}]*"name":"([^"]+)"',
         ]
 
         for pattern in author_patterns:
@@ -385,6 +485,7 @@ class FacebookVideoDownloader:
             r'"length_in_milliseconds":(\d+)',
             r'"playable_duration_in_ms":(\d+)',
             r'"duration_ms":(\d+)',
+            r'"video_duration":(\d+)',
         ]
 
         for pattern in duration_patterns:
@@ -408,6 +509,7 @@ class FacebookVideoDownloader:
             r'"thumbnailImage"[^}]*"uri":"([^"]+)"',
             r'"image"[^}]*"uri":"([^"]+)"',
             r'"cover_photo"[^}]*"source":"([^"]+)"',
+            r'"preview_image"[^}]*"uri":"([^"]+)"',
         ]
 
         for pattern in thumbnail_patterns:
@@ -416,22 +518,6 @@ class FacebookVideoDownloader:
                 thumbnail_url = self.decode_facebook_url(match.group(1))
                 if thumbnail_url and thumbnail_url.startswith("http"):
                     info["thumbnail"] = thumbnail_url
-                    break
-
-        description_patterns = [
-            r'"description":"([^"]+)"',
-            r'"message":\s*{\s*"text":"([^"]+)"',
-            r'"creation_story"[^}]*"comet_sections"[^}]*"story"[^}]*"message"[^}]*"text":"([^"]+)"',
-        ]
-
-        for pattern in description_patterns:
-            match = re.search(pattern, html_content, re.IGNORECASE)
-            if match and match.group(1).strip():
-                description = html.unescape(match.group(1)).strip()
-                if description and len(description) > 3:
-                    info["description"] = description[:200] + (
-                        "..." if len(description) > 200 else ""
-                    )
                     break
 
         return info
@@ -469,11 +555,15 @@ class FacebookVideoDownloader:
 
             video_data_list = self.extract_video_urls(normalized_url)
             if not video_data_list:
-                return {"error": "No video URLs found"}
+                return {
+                    "error": "No video URLs found. The video might be private, deleted, or in an unsupported format."
+                }
 
             quality_options = self.analyze_video_qualities(video_data_list)
             if not quality_options:
-                return {"error": "No working video URLs found"}
+                return {
+                    "error": "No working video URLs found. All video links appear to be broken or inaccessible."
+                }
 
             best_quality = quality_options[0]
             info = self.get_video_info(normalized_url) or {}
@@ -567,7 +657,7 @@ def execute(sender_id, args, context):
         try:
             from functions.sendAttachment import send_video_attachment
         except ImportError:
-            # Fallback to old method if new function not available
+            # Enhanced fallback method
             def send_video_attachment(recipient_id, video_url):
                 try:
                     import json
@@ -578,6 +668,72 @@ def execute(sender_id, args, context):
                     PAGE_ACCESS_TOKEN = config["page_access_token"]
                     GRAPH_API_VERSION = config["graph_api_version"]
 
+                    # Try upload method first
+                    try:
+                        upload_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/message_attachments"
+                        upload_params = {"access_token": PAGE_ACCESS_TOKEN}
+                        upload_data = {
+                            "message": json.dumps(
+                                {
+                                    "attachment": {
+                                        "type": "video",
+                                        "payload": {"is_reusable": False},
+                                    }
+                                }
+                            )
+                        }
+
+                        # Download video first
+                        video_response = requests.get(video_url, timeout=30)
+                        if video_response.status_code == 200:
+                            files = {
+                                "filedata": (
+                                    "video.mp4",
+                                    video_response.content,
+                                    "video/mp4",
+                                )
+                            }
+                            upload_response = requests.post(
+                                upload_url,
+                                params=upload_params,
+                                data=upload_data,
+                                files=files,
+                                timeout=120,
+                            )
+
+                            if upload_response.status_code == 200:
+                                upload_result = upload_response.json()
+                                attachment_id = upload_result.get("attachment_id")
+
+                                if attachment_id:
+                                    # Send using attachment ID
+                                    params = {"access_token": PAGE_ACCESS_TOKEN}
+                                    headers = {"Content-Type": "application/json"}
+                                    data = {
+                                        "recipient": {"id": recipient_id},
+                                        "message": {
+                                            "attachment": {
+                                                "type": "video",
+                                                "payload": {
+                                                    "attachment_id": attachment_id
+                                                },
+                                            }
+                                        },
+                                    }
+
+                                    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
+                                    response = requests.post(
+                                        url,
+                                        params=params,
+                                        headers=headers,
+                                        json=data,
+                                        timeout=60,
+                                    )
+                                    return response.json()
+                    except Exception as upload_error:
+                        pass
+
+                    # Fallback to URL method
                     params = {"access_token": PAGE_ACCESS_TOKEN}
                     headers = {"Content-Type": "application/json"}
                     data = {
@@ -591,11 +747,11 @@ def execute(sender_id, args, context):
                     }
 
                     url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
-
                     response = requests.post(
                         url, params=params, headers=headers, json=data, timeout=60
                     )
                     return response.json()
+
                 except Exception as e:
                     return {"error": str(e)}
 
@@ -620,88 +776,84 @@ def execute(sender_id, args, context):
         info_message += f"📝 Title: {title}\n"
         info_message += f"👤 Author: {author}\n"
         info_message += f"⏱️ Duration: {duration}\n\n"
-        info_message += "📹 Sending video..."
+        info_message += "📹 Processing video..."
 
         send_message_func(sender_id, info_message)
 
-        video_url_to_send = video_url_hd or video_url_sd or video_url_auto
+        # Try different quality options
+        video_urls_to_try = []
+        if video_url_hd:
+            video_urls_to_try.append(("HD", video_url_hd))
+        if video_url_sd and video_url_sd != video_url_hd:
+            video_urls_to_try.append(("SD", video_url_sd))
+        if video_url_auto and video_url_auto not in [video_url_hd, video_url_sd]:
+            video_urls_to_try.append(("Auto", video_url_auto))
 
-        if video_url_to_send:
+        # Add all quality options as fallbacks
+        for option in quality_options:
+            if option["url"] not in [v[1] for v in video_urls_to_try]:
+                video_urls_to_try.append((option["quality"], option["url"]))
+
+        if video_urls_to_try:
             send_typing_indicator(sender_id, True)
 
-            if video_url_hd:
-                quality_msg = "HD quality"
-                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
-            elif video_url_sd:
-                quality_msg = "SD quality"
-                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
-            else:
-                quality_msg = "best available quality"
-                send_message_func(sender_id, f"📤 Uploading video in {quality_msg}...")
+            for quality_name, video_url in video_urls_to_try:
+                send_message_func(
+                    sender_id, f"📤 Uploading video ({quality_name} quality)..."
+                )
 
-            result = send_video_attachment(sender_id, video_url_to_send)
+                result = send_video_attachment(sender_id, video_url)
 
-            if result and result.get("message_id"):
-                send_message_func(sender_id, "✅ Video sent successfully!")
-            elif result and "error" in result:
-                error_msg = result["error"]
-                if "too large" in error_msg.lower():
-                    # Try lower quality if available
-                    if quality_options and len(quality_options) > 1:
+                if result and result.get("message_id"):
+                    send_message_func(
+                        sender_id,
+                        f"✅ Video sent successfully ({quality_name} quality)!",
+                    )
+                    break
+                elif result and "error" in result:
+                    error_msg = result["error"]
+                    if "too large" in error_msg.lower():
                         send_message_func(
                             sender_id,
-                            "⚠️ HD/SD quality too large, trying lower quality...",
+                            f"⚠️ {quality_name} quality too large, trying next quality...",
                         )
-                        for option in quality_options[1:]:
-                            if option["size_mb"] < 25:  # Try smaller videos
-                                result = send_video_attachment(sender_id, option["url"])
-                                if result and result.get("message_id"):
-                                    send_message_func(
-                                        sender_id,
-                                        f"✅ Video sent in {option['quality']} quality!",
-                                    )
-                                    break
+                        continue
+                    elif "timeout" in error_msg.lower():
+                        send_message_func(
+                            sender_id,
+                            f"⏰ Upload timeout for {quality_name} quality, trying next...",
+                        )
+                        continue
+                    elif len(video_urls_to_try) == 1:  # Only one URL to try
+                        if "400" in str(error_msg):
+                            send_message_func(
+                                sender_id,
+                                "❌ Video format not supported by Facebook. Try a different Facebook video.",
+                            )
                         else:
                             send_message_func(
-                                sender_id,
-                                "❌ Video is too large to send. All available qualities exceed size limit.",
+                                sender_id, f"❌ Failed to send video: {error_msg}"
                             )
-                    else:
-                        send_message_func(sender_id, "❌ Video is too large to send.")
-                elif "timeout" in error_msg.lower():
-                    send_message_func(
-                        sender_id,
-                        "⏰ Upload timeout. The video might be too large or connection is slow.",
-                    )
+                        break
                 else:
-                    send_message_func(
-                        sender_id, f"❌ Failed to send video: {error_msg}"
-                    )
-            else:
-                # Try alternative qualities
-                if quality_options and len(quality_options) > 1:
-                    send_message_func(
-                        sender_id,
-                        "⚠️ Primary quality failed, trying alternative qualities...",
-                    )
-                    for option in quality_options[1:]:
-                        result = send_video_attachment(sender_id, option["url"])
-                        if result and result.get("message_id"):
-                            send_message_func(
-                                sender_id,
-                                f"✅ Video sent in {option['quality']} quality!",
-                            )
-                            break
+                    if len(video_urls_to_try) == 1:  # Only one URL to try
+                        send_message_func(
+                            sender_id,
+                            "❌ Failed to send video. The video might be private or unavailable.",
+                        )
+                        break
                     else:
                         send_message_func(
                             sender_id,
-                            "❌ Failed to send video in any quality. The video might be unavailable or corrupted.",
+                            f"⚠️ {quality_name} quality failed, trying next...",
                         )
-                else:
-                    send_message_func(
-                        sender_id,
-                        "❌ Failed to send video. The video might be too large or unavailable.",
-                    )
+                        continue
+            else:
+                # All URLs failed
+                send_message_func(
+                    sender_id,
+                    "❌ Failed to send video in any quality. The video might be private, too large, or in an unsupported format.",
+                )
         else:
             send_message_func(sender_id, "❌ No video URL found for sending.")
 
