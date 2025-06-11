@@ -8,6 +8,7 @@ import os
 import pickle
 from collections import defaultdict, Counter
 import statistics
+import hashlib
 
 try:
     import pytz
@@ -26,15 +27,22 @@ stock_analytics = defaultdict(
     lambda: {"last_seen": None, "frequency": 0, "avg_price": 0}
 )
 user_last_command_time = {}
+user_command_usage = defaultdict(int)
+user_session_data = {}
+message_cache = {}
 
 PH_OFFSET = 8
-COMMAND_COOLDOWN = 2
+COMMAND_COOLDOWN = 3
+SPAM_THRESHOLD = 5
+CACHE_DURATION = 60
+MAX_COMMANDS_PER_MINUTE = 10
 
 TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
 PRICE_ALERTS_FILE = "gagstock_price_alerts.pkl"
 USER_STATS_FILE = "gagstock_user_stats.pkl"
 PRICE_HISTORY_FILE = "gagstock_price_history.pkl"
 USER_PREFERENCES_FILE = "gagstock_user_preferences.pkl"
+
 
 def load_tracked_items():
     global user_tracked_items
@@ -50,6 +58,7 @@ def load_tracked_items():
         logger.error(f"Error loading tracked items: {e}")
         user_tracked_items = {}
 
+
 def save_tracked_items_to_file():
     try:
         with open(TRACKED_ITEMS_FILE, "wb") as f:
@@ -57,6 +66,7 @@ def save_tracked_items_to_file():
         logger.debug(f"Saved tracked items for {len(user_tracked_items)} users")
     except Exception as e:
         logger.error(f"Error saving tracked items: {e}")
+
 
 def load_user_preferences():
     global user_preferences
@@ -72,6 +82,7 @@ def load_user_preferences():
         logger.error(f"Error loading preferences: {e}")
         user_preferences = {}
 
+
 def save_user_preferences():
     try:
         with open(USER_PREFERENCES_FILE, "wb") as f:
@@ -79,6 +90,7 @@ def save_user_preferences():
         logger.debug(f"Saved preferences for {len(user_preferences)} users")
     except Exception as e:
         logger.error(f"Error saving preferences: {e}")
+
 
 def load_all_data():
     global user_tracked_items, user_price_alerts, user_stats, price_history, user_preferences
@@ -117,6 +129,7 @@ def load_all_data():
         logger.error(f"Error loading price history: {e}")
         price_history.clear()
 
+
 def save_data(data_type):
     file_mapping = {
         "tracked_items": (TRACKED_ITEMS_FILE, user_tracked_items),
@@ -134,8 +147,60 @@ def save_data(data_type):
     except Exception as e:
         logger.error(f"Error saving {data_type}: {e}")
 
+
+def check_spam_protection(sender_id):
+    current_time = time.time()
+    minute_window = int(current_time // 60)
+
+    if sender_id not in user_command_usage:
+        user_command_usage[sender_id] = {}
+
+    if minute_window not in user_command_usage[sender_id]:
+        user_command_usage[sender_id] = {minute_window: 1}
+    else:
+        user_command_usage[sender_id][minute_window] += 1
+
+    old_windows = [w for w in user_command_usage[sender_id] if w < minute_window - 2]
+    for w in old_windows:
+        del user_command_usage[sender_id][w]
+
+    if user_command_usage[sender_id][minute_window] > MAX_COMMANDS_PER_MINUTE:
+        return (
+            False,
+            f"⚠️ Rate limit exceeded. Please wait before sending more commands. (Max {MAX_COMMANDS_PER_MINUTE}/minute)",
+        )
+
+    if sender_id in user_last_command_time:
+        time_since_last = current_time - user_last_command_time[sender_id]
+        if time_since_last < COMMAND_COOLDOWN:
+            remaining = COMMAND_COOLDOWN - time_since_last
+            return (
+                False,
+                f"⏳ Please wait {remaining:.1f} more seconds before using another command.",
+            )
+
+    user_last_command_time[sender_id] = current_time
+    return True, None
+
+
+def get_cached_message(cache_key):
+    current_time = time.time()
+    if cache_key in message_cache:
+        cached_data = message_cache[cache_key]
+        if current_time - cached_data["timestamp"] < CACHE_DURATION:
+            return cached_data["message"]
+        else:
+            del message_cache[cache_key]
+    return None
+
+
+def cache_message(cache_key, message):
+    message_cache[cache_key] = {"message": message, "timestamp": time.time()}
+
+
 def pad(n):
     return f"0{n}" if n < 10 else str(n)
+
 
 def get_ph_time():
     if pytz:
@@ -144,6 +209,7 @@ def get_ph_time():
     else:
         utc_now = datetime.utcnow()
         return utc_now + timedelta(hours=PH_OFFSET)
+
 
 def get_countdown(target):
     now = get_ph_time()
@@ -169,6 +235,7 @@ def get_countdown(target):
 
     return f"{pad(hours)}h {pad(minutes)}m {pad(seconds)}s"
 
+
 def get_next_restocks():
     now = get_ph_time()
     timers = {}
@@ -181,14 +248,15 @@ def get_next_restocks():
             next_egg = next_egg.replace(minute=0) + timedelta(hours=1)
         timers["egg"] = get_countdown(next_egg)
 
-        next_5_minute_mark = (now.minute // 5 + 1) * 5
+        current_minute = now.minute
+        next_5_minute_mark = ((current_minute // 5) + 1) * 5
         next_5 = now.replace(second=0, microsecond=0)
 
         if next_5_minute_mark >= 60:
             next_5 = next_5.replace(minute=0) + timedelta(hours=1)
         else:
             next_5 = next_5.replace(minute=next_5_minute_mark)
-        
+
         timers["gear"] = timers["seed"] = get_countdown(next_5)
 
         next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -211,13 +279,67 @@ def get_next_restocks():
         timers = {
             "egg": "Error",
             "gear": "Error",
-
             "seed": "Error",
             "honey": "Error",
             "cosmetic": "Error",
         }
 
     return timers
+
+
+def get_upcoming_restocks():
+    now = get_ph_time()
+    upcoming = []
+
+    try:
+        next_egg = now.replace(second=0, microsecond=0)
+        if now.minute < 30:
+            next_egg = next_egg.replace(minute=30)
+        else:
+            next_egg = next_egg.replace(minute=0) + timedelta(hours=1)
+
+        time_to_egg = (next_egg - now).total_seconds()
+        if time_to_egg <= 300:
+            upcoming.append(("egg", get_countdown(next_egg)))
+
+        current_minute = now.minute
+        next_5_minute_mark = ((current_minute // 5) + 1) * 5
+        next_5 = now.replace(second=0, microsecond=0)
+
+        if next_5_minute_mark >= 60:
+            next_5 = next_5.replace(minute=0) + timedelta(hours=1)
+        else:
+            next_5 = next_5.replace(minute=next_5_minute_mark)
+
+        time_to_5min = (next_5 - now).total_seconds()
+        if time_to_5min <= 300:
+            upcoming.append(("gear", get_countdown(next_5)))
+            upcoming.append(("seed", get_countdown(next_5)))
+
+        next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        time_to_hour = (next_hour - now).total_seconds()
+        if time_to_hour <= 300:
+            upcoming.append(("honey", get_countdown(next_hour)))
+
+        current_hour = now.hour
+        next_7h_mark = ((current_hour // 7) + 1) * 7
+
+        if next_7h_mark >= 24:
+            next_7 = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+                days=1, hours=next_7h_mark - 24
+            )
+        else:
+            next_7 = now.replace(hour=next_7h_mark, minute=0, second=0, microsecond=0)
+
+        time_to_7h = (next_7 - now).total_seconds()
+        if time_to_7h <= 300:
+            upcoming.append(("cosmetic", get_countdown(next_7)))
+
+    except Exception as e:
+        logger.error(f"Error calculating upcoming restocks: {e}")
+
+    return upcoming
+
 
 def format_value(val):
     try:
@@ -230,6 +352,7 @@ def format_value(val):
             return f"x{val}"
     except (ValueError, TypeError):
         return f"x{val}"
+
 
 def format_list(arr, show_rarity=False):
     if not arr:
@@ -261,8 +384,10 @@ def format_list(arr, show_rarity=False):
 
     return "\n".join(result) if result else "None."
 
+
 def get_available_categories():
     return ["gear", "seed", "egg", "honey", "cosmetic"]
+
 
 def get_category_emoji(category):
     category_emojis = {
@@ -273,6 +398,7 @@ def get_category_emoji(category):
         "cosmetic": "🎨",
     }
     return category_emojis.get(category, "📦")
+
 
 def get_all_items_from_stock(stock_data):
     all_items = []
@@ -298,8 +424,10 @@ def get_all_items_from_stock(stock_data):
 
     return all_items
 
+
 def normalize_item_name(name):
     return name.lower().strip().replace("_", " ").replace("-", " ")
+
 
 def update_price_history(item_name, category, value):
     key = f"{category}/{item_name}"
@@ -310,6 +438,7 @@ def update_price_history(item_name, category, value):
         price_history[key] = price_history[key][-100:]
 
     save_data("price_history")
+
 
 def get_price_trend(item_name, category):
     key = f"{category}/{item_name}"
@@ -333,6 +462,7 @@ def get_price_trend(item_name, category):
     else:
         return "📊 Stable"
 
+
 def update_user_stats(sender_id, action):
     if sender_id not in user_stats:
         user_stats[sender_id] = {
@@ -352,6 +482,7 @@ def update_user_stats(sender_id, action):
         user_stats[sender_id]["sessions_started"] += 1
 
     save_data("stats")
+
 
 def get_user_preferences(sender_id):
     global user_preferences
@@ -374,6 +505,7 @@ def get_user_preferences(sender_id):
 
     return user_preferences[sender_id]
 
+
 def set_user_preference(sender_id, key, value):
     global user_preferences
 
@@ -392,6 +524,7 @@ def set_user_preference(sender_id, key, value):
         logger.error(f"Error saving preference {key} for {sender_id}: {e}")
         return False
 
+
 def add_price_alert(sender_id, category, item_name, condition, value):
     if sender_id not in user_price_alerts:
         user_price_alerts[sender_id] = []
@@ -407,6 +540,7 @@ def add_price_alert(sender_id, category, item_name, condition, value):
     user_price_alerts[sender_id].append(alert)
     save_data("price_alerts")
     return True
+
 
 def check_price_alerts(sender_id, stock_data):
     if sender_id not in user_price_alerts:
@@ -437,6 +571,7 @@ def check_price_alerts(sender_id, stock_data):
 
     return triggered_alerts
 
+
 def parse_tracked_items(items_string):
     items = []
     if "|" in items_string:
@@ -455,6 +590,7 @@ def parse_tracked_items(items_string):
                 items.append({"category": category, "item_name": item_name})
 
     return items
+
 
 def save_tracked_items(sender_id, items):
     global user_tracked_items
@@ -485,6 +621,7 @@ def save_tracked_items(sender_id, items):
 
     save_tracked_items_to_file()
     return added_count
+
 
 def add_tracked_items(sender_id, items_string):
     items = parse_tracked_items(items_string)
@@ -559,6 +696,7 @@ def add_tracked_items(sender_id, items_string):
 
     return True, "\n".join(message_parts)
 
+
 def remove_tracked_item(sender_id, item_string):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return False, "❌ You don't have any favorite items to remove."
@@ -588,6 +726,7 @@ def remove_tracked_item(sender_id, item_string):
             )
 
     return False, f"❌ '{category}/{item_name}' not found in your favorites list."
+
 
 def list_tracked_items(sender_id):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
@@ -632,6 +771,7 @@ def list_tracked_items(sender_id):
     message += "💡 Set price alert: 'gagstock alert category/item above/below value'"
     return message
 
+
 def clear_tracked_items(sender_id):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return "❌ You don't have any favorite items to clear."
@@ -642,6 +782,7 @@ def clear_tracked_items(sender_id):
     logger.info(f"Cleared {count} tracked items for {sender_id}")
     return f"✅ Cleared {count} favorite item(s) successfully."
 
+
 def cleanup_session(sender_id):
     if sender_id in active_sessions:
         session = active_sessions[sender_id]
@@ -650,6 +791,7 @@ def cleanup_session(sender_id):
             timer.cancel()
         del active_sessions[sender_id]
         logger.info(f"Cleaned up gagstock session for {sender_id}")
+
 
 def get_market_summary(stock_data):
     all_items = get_all_items_from_stock(stock_data)
@@ -680,6 +822,7 @@ def get_market_summary(stock_data):
     )
 
     return summary
+
 
 def fetch_all_data(sender_id, send_message_func):
     if sender_id not in active_sessions:
@@ -769,6 +912,7 @@ def fetch_all_data(sender_id, send_message_func):
             session["last_combined_key"] = combined_key
 
             restocks = get_next_restocks()
+            upcoming = get_upcoming_restocks()
 
             gear_list = format_list(
                 stock_data.get("gear", []), user_prefs["show_rarity"]
@@ -801,6 +945,13 @@ def fetch_all_data(sender_id, send_message_func):
                 f"🌟 Rarity: {weather_rarity}"
             )
 
+            upcoming_text = ""
+            if upcoming:
+                upcoming_text = "\n\n⚡ UPCOMING RESTOCKS (< 5 min):\n"
+                for category, countdown in upcoming:
+                    emoji = get_category_emoji(category)
+                    upcoming_text += f"{emoji} {category.title()}: {countdown}\n"
+
             if user_prefs["compact_mode"]:
                 message = (
                     f"🌾 GAG Stock Update\n\n"
@@ -811,6 +962,7 @@ def fetch_all_data(sender_id, send_message_func):
                     f"🍯 Honey ({restocks['honey']}): {len(stock_data.get('honey', []))} items\n\n"
                     f"{weather_details}\n\n"
                     f"{get_market_summary(stock_data)}"
+                    f"{upcoming_text}"
                 )
             else:
                 message = (
@@ -822,6 +974,7 @@ def fetch_all_data(sender_id, send_message_func):
                     f"🍯 Honey:\n{honey_list}\n⏳ Restock in: {restocks['honey']}\n\n"
                     f"{weather_details}\n\n"
                     f"{get_market_summary(stock_data)}"
+                    f"{upcoming_text}"
                 )
 
             triggered_alerts = check_price_alerts(sender_id, stock_data)
@@ -843,12 +996,12 @@ def fetch_all_data(sender_id, send_message_func):
 
         if sender_id in active_sessions:
             timer = threading.Timer(
-                10.0, fetch_all_data, args=[sender_id, send_message_func]
+                8.0, fetch_all_data, args=[sender_id, send_message_func]
             )
             timer.daemon = True
             timer.start()
             active_sessions[sender_id]["timer"] = timer
-            logger.debug(f"Scheduled next fetch for {sender_id} in 10 seconds")
+            logger.debug(f"Scheduled next fetch for {sender_id} in 8 seconds")
 
     except requests.Timeout:
         logger.error(f"Timeout fetching data for {sender_id}")
@@ -889,16 +1042,15 @@ def fetch_all_data(sender_id, send_message_func):
                 pass
         cleanup_session(sender_id)
 
+
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
-    current_time = time.time()
-    if sender_id in user_last_command_time and current_time - user_last_command_time[sender_id] < COMMAND_COOLDOWN:
-        remaining_cooldown = COMMAND_COOLDOWN - (current_time - user_last_command_time[sender_id])
-        send_message_func(sender_id, f"⏳ Please wait {remaining_cooldown:.1f} more seconds before using another command.")
+    spam_check, spam_message = check_spam_protection(sender_id)
+    if not spam_check:
+        send_message_func(sender_id, spam_message)
         return
-    user_last_command_time[sender_id] = current_time
-    
+
     try:
         load_all_data()
     except Exception as e:
@@ -918,12 +1070,25 @@ def execute(sender_id, args, context):
     update_user_stats(sender_id, "command")
 
     if not args:
+        cache_key = f"help_{sender_id}"
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
         stats = user_stats.get(sender_id, {})
         tracked_count = len(user_tracked_items.get(sender_id, []))
         alerts_count = len(user_price_alerts.get(sender_id, []))
 
-        send_message_func(
-            sender_id,
+        upcoming = get_upcoming_restocks()
+        upcoming_text = ""
+        if upcoming:
+            upcoming_text = "\n\n⚡ UPCOMING RESTOCKS (< 5 min):\n"
+            for category, countdown in upcoming:
+                emoji = get_category_emoji(category)
+                upcoming_text += f"{emoji} {category.title()}: {countdown}\n"
+
+        help_message = (
             "🌾 Gagstock — Advanced Stock Tracker\n\n"
             "📊 Full Stock Tracking:\n"
             "• 'gagstock on' - Track ALL stock changes\n"
@@ -945,7 +1110,8 @@ def execute(sender_id, args, context):
             "• 'gagstock search [item_name]' - Search for items\n"
             "• 'gagstock trends category/item' - Show price trends\n"
             "• 'gagstock market' - Market analysis\n"
-            "• 'gagstock top' - Most valuable items\n\n"
+            "• 'gagstock top' - Most valuable items\n"
+            "• 'gagstock restock' - Next restock times\n\n"
             "⚙️ Settings:\n"
             "• 'gagstock settings' - View/change preferences\n"
             "• 'gagstock stats' - Your usage statistics\n\n"
@@ -955,8 +1121,12 @@ def execute(sender_id, args, context):
             "   • 'gagstock gear/ancient_shovel' (adds to favorites)\n"
             "   • 'gagstock alert egg/legendary above 5000' (price alert)\n"
             "   • 'gagstock on' (tracks ALL items)\n"
-            "   • 'gagstockfav on' (tracks only your favorites)",
+            "   • 'gagstockfav on' (tracks only your favorites)"
+            f"{upcoming_text}"
         )
+
+        cache_message(cache_key, help_message)
+        send_message_func(sender_id, help_message)
         return
 
     action = args[0].lower()
@@ -981,15 +1151,25 @@ def execute(sender_id, args, context):
         update_user_stats(sender_id, "start_session")
         prefs = get_user_preferences(sender_id)
 
+        upcoming = get_upcoming_restocks()
+        upcoming_text = ""
+        if upcoming:
+            upcoming_text = f"\n\n⚡ UPCOMING RESTOCKS (< 5 min):\n"
+            for category, countdown in upcoming:
+                emoji = get_category_emoji(category)
+                upcoming_text += f"{emoji} {category.title()}: {countdown}\n"
+
         send_message_func(
             sender_id,
             "✅ Gagstock started! Tracking ALL stock changes.\n"
             "🔔 You'll be notified when any stock or weather changes.\n"
             f"📊 Mode: {'Compact' if prefs['compact_mode'] else 'Detailed'}\n"
             f"🎯 Rarity indicators: {'ON' if prefs['show_rarity'] else 'OFF'}\n"
-            f"🚨 Price alerts: {'ON' if prefs['price_alerts'] else 'OFF'}\n\n"
+            f"🚨 Price alerts: {'ON' if prefs['price_alerts'] else 'OFF'}\n"
+            f"⚡ Update frequency: Every 8 seconds\n\n"
             "💡 For favorites-only tracking, use: 'gagstockfav on'\n"
-            "⚙️ Change settings with: 'gagstock settings'",
+            "⚙️ Change settings with: 'gagstock settings'"
+            f"{upcoming_text}",
         )
 
         active_sessions[sender_id] = {
@@ -1000,6 +1180,42 @@ def execute(sender_id, args, context):
 
         logger.info(f"Started full gagstock session for {sender_id}")
         fetch_all_data(sender_id, send_message_func)
+        return
+
+    elif action == "restock":
+        cache_key = f"restock_{sender_id}"
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
+        restocks = get_next_restocks()
+        upcoming = get_upcoming_restocks()
+
+        message = "⏰ Next Restock Times:\n\n"
+
+        for category in get_available_categories():
+            emoji = get_category_emoji(category)
+            restock_time = restocks.get(category, "Unknown")
+            message += f"{emoji} {category.title()}: {restock_time}\n"
+
+        if upcoming:
+            message += "\n⚡ UPCOMING RESTOCKS (< 5 min):\n"
+            for category, countdown in upcoming:
+                emoji = get_category_emoji(category)
+                message += f"🔥 {emoji} {category.title()}: {countdown}\n"
+
+        message += (
+            "\n💡 Restock Schedule:\n"
+            "🥚 Eggs: Every 30 minutes\n"
+            "🛠️ Gear & 🌱 Seeds: Every 5 minutes\n"
+            "🍯 Honey: Every hour\n"
+            "🎨 Cosmetics: Every 7 hours\n\n"
+            "🔔 Use 'gagstock on' to get notified of all changes!"
+        )
+
+        cache_message(cache_key, message)
+        send_message_func(sender_id, message)
         return
 
     elif action == "compact":
@@ -1139,10 +1355,19 @@ def execute(sender_id, args, context):
         else:
             last_active_str = "Never"
 
+        command_usage_today = user_command_usage.get(sender_id, {})
+        current_minute_window = int(time.time() // 60)
+        today_usage = sum(
+            count
+            for window, count in command_usage_today.items()
+            if window >= current_minute_window - 1440
+        )
+
         send_message_func(
             sender_id,
             f"📊 Your Gagstock Statistics:\n\n"
             f"🎯 Commands used: {stats.get('commands_used', 0)}\n"
+            f"📈 Commands today: {today_usage}\n"
             f"⭐ Items tracked: {tracked_count}\n"
             f"🚨 Price alerts: {alerts_count}\n"
             f"📡 Sessions started: {stats.get('sessions_started', 0)}\n"
@@ -1309,6 +1534,12 @@ def execute(sender_id, args, context):
         return
 
     elif action == "market":
+        cache_key = f"market_{sender_id}"
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
         try:
             headers = {"User-Agent": "GagStock-Bot/1.0"}
             stock_response = requests.get(
@@ -1350,6 +1581,7 @@ def execute(sender_id, args, context):
                     message += f"   💎 Max: {format_value(data['max_value'])}\n"
                     message += f"   💵 Total: {format_value(data['total_value'])}\n\n"
 
+                cache_message(cache_key, message)
                 send_message_func(sender_id, message)
             else:
                 send_message_func(sender_id, "❌ Failed to fetch market data")
@@ -1361,6 +1593,12 @@ def execute(sender_id, args, context):
         return
 
     elif action == "top":
+        cache_key = f"top_{sender_id}"
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
         try:
             headers = {"User-Agent": "GagStock-Bot/1.0"}
             stock_response = requests.get(
@@ -1391,6 +1629,8 @@ def execute(sender_id, args, context):
                 message += (
                     "🚨 Set price alert: 'gagstock alert category/item below value'"
                 )
+
+                cache_message(cache_key, message)
                 send_message_func(sender_id, message)
             else:
                 send_message_func(sender_id, "❌ Failed to fetch stock data")
@@ -1400,6 +1640,12 @@ def execute(sender_id, args, context):
         return
 
     elif action == "stock":
+        cache_key = f"stock_{sender_id}"
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
         try:
             headers = {"User-Agent": "GagStock-Bot/1.0"}
             stock_response = requests.get(
@@ -1411,6 +1657,7 @@ def execute(sender_id, args, context):
             if stock_response.status_code == 200:
                 stock_data = stock_response.json()
                 restocks = get_next_restocks()
+                upcoming = get_upcoming_restocks()
                 prefs = get_user_preferences(sender_id)
 
                 categories = {
@@ -1457,9 +1704,18 @@ def execute(sender_id, args, context):
 
                     message += "\n"
 
+                if upcoming:
+                    message += "⚡ UPCOMING RESTOCKS (< 5 min):\n"
+                    for category, countdown in upcoming:
+                        emoji = get_category_emoji(category)
+                        message += f"🔥 {emoji} {category.title()}: {countdown}\n"
+                    message += "\n"
+
                 message += f"{get_market_summary(stock_data)}\n\n"
                 message += "💡 Add to favorites: 'gagstock category/item_name'\n"
                 message += "🚨 Set price alert: 'gagstock alert category/item above/below value'"
+
+                cache_message(cache_key, message)
                 send_message_func(sender_id, message)
             else:
                 send_message_func(
@@ -1495,6 +1751,14 @@ def execute(sender_id, args, context):
             return
 
         item_name = " ".join(args[1:])
+        cache_key = (
+            f"search_{sender_id}_{hashlib.md5(item_name.encode()).hexdigest()[:8]}"
+        )
+        cached_response = get_cached_message(cache_key)
+        if cached_response:
+            send_message_func(sender_id, cached_response)
+            return
+
         try:
             headers = {"User-Agent": "GagStock-Bot/1.0"}
             stock_response = requests.get(
@@ -1533,14 +1797,13 @@ def execute(sender_id, args, context):
                         elif item["value"] >= 100:
                             rarity = " 🔥 Uncommon"
 
-                        send_message_func(
-                            sender_id,
+                        message = (
                             f"🔍 Found: {emoji_part}{item['display_name']}\n"
                             f"{category_emoji} Category: {item['category'].title()}\n"
                             f"💰 Value: {format_value(item['value'])}{rarity}\n"
                             f"📈 Trend: {trend}\n\n"
                             f"💡 Add to favorites: 'gagstock {item['category']}/{item['display_name']}'\n"
-                            f"🚨 Set price alert: 'gagstock alert {item['category']}/{item['display_name']} above/below value'",
+                            f"🚨 Set price alert: 'gagstock alert {item['category']}/{item['display_name']} above/below value'"
                         )
                     else:
                         message = f"🔍 Found {len(found_items)} items matching '{item_name}':\n\n"
@@ -1567,14 +1830,16 @@ def execute(sender_id, args, context):
 
                         message += "💡 Add any item: 'gagstock category/item_name'\n"
                         message += "🚨 Set price alerts for valuable items!"
-                        send_message_func(sender_id, message)
+
+                    cache_message(cache_key, message)
+                    send_message_func(sender_id, message)
                 else:
-                    send_message_func(
-                        sender_id,
+                    message = (
                         f"❌ Item '{item_name}' not found in current stock.\n"
                         f"💡 Try a different spelling or check 'gagstock stock' for available items.\n"
-                        f"🔍 You can also try 'gagstock top' to see the most valuable items.",
+                        f"🔍 You can also try 'gagstock top' to see the most valuable items."
                     )
+                    send_message_func(sender_id, message)
             else:
                 send_message_func(
                     sender_id,
@@ -1645,5 +1910,6 @@ def execute(sender_id, args, context):
                 "🔍 Popular commands:\n"
                 "• 'gagstock on' - Start tracking\n"
                 "• 'gagstock search item_name' - Find items\n"
-                "• 'gagstock top' - Most valuable items",
+                "• 'gagstock top' - Most valuable items\n"
+                "• 'gagstock restock' - Next restock times",
             )
