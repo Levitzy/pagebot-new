@@ -23,8 +23,11 @@ user_favorite_stats = {}
 user_notification_history = {}
 user_custom_filters = {}
 price_history = defaultdict(list)
+user_last_command_time = {}
 
 PH_OFFSET = 8
+COMMAND_COOLDOWN = 2
+
 TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
 USER_PREFERENCES_FILE = "gagstock_user_preferences.pkl"
 FAVORITE_STATS_FILE = "gagstockfav_stats.pkl"
@@ -135,14 +138,13 @@ def get_next_restocks():
             next_egg = next_egg.replace(minute=0) + timedelta(hours=1)
         timers["egg"] = get_countdown(next_egg)
 
+        next_5_minute_mark = (now.minute // 5 + 1) * 5
         next_5 = now.replace(second=0, microsecond=0)
-        current_minute = now.minute + (1 if now.second > 0 else 0)
-        next_minute = ((current_minute + 4) // 5) * 5
 
-        if next_minute >= 60:
+        if next_5_minute_mark >= 60:
             next_5 = next_5.replace(minute=0) + timedelta(hours=1)
         else:
-            next_5 = next_5.replace(minute=next_minute)
+            next_5 = next_5.replace(minute=next_5_minute_mark)
 
         timers["gear"] = timers["seed"] = get_countdown(next_5)
 
@@ -659,6 +661,21 @@ def fetch_favorite_data(sender_id, send_message_func):
 
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
+
+    current_time = time.time()
+    if (
+        sender_id in user_last_command_time
+        and current_time - user_last_command_time[sender_id] < COMMAND_COOLDOWN
+    ):
+        remaining_cooldown = COMMAND_COOLDOWN - (
+            current_time - user_last_command_time[sender_id]
+        )
+        send_message_func(
+            sender_id,
+            f"⏳ Please wait {remaining_cooldown:.1f} more seconds before using another command.",
+        )
+        return
+    user_last_command_time[sender_id] = current_time
 
     load_all_data()
 

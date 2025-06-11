@@ -25,14 +25,16 @@ price_history = defaultdict(list)
 stock_analytics = defaultdict(
     lambda: {"last_seen": None, "frequency": 0, "avg_price": 0}
 )
+user_last_command_time = {}
 
 PH_OFFSET = 8
+COMMAND_COOLDOWN = 2
+
 TRACKED_ITEMS_FILE = "gagstock_tracked_items.pkl"
 PRICE_ALERTS_FILE = "gagstock_price_alerts.pkl"
 USER_STATS_FILE = "gagstock_user_stats.pkl"
 PRICE_HISTORY_FILE = "gagstock_price_history.pkl"
 USER_PREFERENCES_FILE = "gagstock_user_preferences.pkl"
-
 
 def load_tracked_items():
     global user_tracked_items
@@ -48,7 +50,6 @@ def load_tracked_items():
         logger.error(f"Error loading tracked items: {e}")
         user_tracked_items = {}
 
-
 def save_tracked_items_to_file():
     try:
         with open(TRACKED_ITEMS_FILE, "wb") as f:
@@ -56,7 +57,6 @@ def save_tracked_items_to_file():
         logger.debug(f"Saved tracked items for {len(user_tracked_items)} users")
     except Exception as e:
         logger.error(f"Error saving tracked items: {e}")
-
 
 def load_user_preferences():
     global user_preferences
@@ -72,7 +72,6 @@ def load_user_preferences():
         logger.error(f"Error loading preferences: {e}")
         user_preferences = {}
 
-
 def save_user_preferences():
     try:
         with open(USER_PREFERENCES_FILE, "wb") as f:
@@ -80,7 +79,6 @@ def save_user_preferences():
         logger.debug(f"Saved preferences for {len(user_preferences)} users")
     except Exception as e:
         logger.error(f"Error saving preferences: {e}")
-
 
 def load_all_data():
     global user_tracked_items, user_price_alerts, user_stats, price_history, user_preferences
@@ -119,7 +117,6 @@ def load_all_data():
         logger.error(f"Error loading price history: {e}")
         price_history.clear()
 
-
 def save_data(data_type):
     file_mapping = {
         "tracked_items": (TRACKED_ITEMS_FILE, user_tracked_items),
@@ -137,10 +134,8 @@ def save_data(data_type):
     except Exception as e:
         logger.error(f"Error saving {data_type}: {e}")
 
-
 def pad(n):
     return f"0{n}" if n < 10 else str(n)
-
 
 def get_ph_time():
     if pytz:
@@ -149,7 +144,6 @@ def get_ph_time():
     else:
         utc_now = datetime.utcnow()
         return utc_now + timedelta(hours=PH_OFFSET)
-
 
 def get_countdown(target):
     now = get_ph_time()
@@ -175,7 +169,6 @@ def get_countdown(target):
 
     return f"{pad(hours)}h {pad(minutes)}m {pad(seconds)}s"
 
-
 def get_next_restocks():
     now = get_ph_time()
     timers = {}
@@ -188,15 +181,14 @@ def get_next_restocks():
             next_egg = next_egg.replace(minute=0) + timedelta(hours=1)
         timers["egg"] = get_countdown(next_egg)
 
+        next_5_minute_mark = (now.minute // 5 + 1) * 5
         next_5 = now.replace(second=0, microsecond=0)
-        current_minute = now.minute + (1 if now.second > 0 else 0)
-        next_minute = ((current_minute + 4) // 5) * 5
 
-        if next_minute >= 60:
+        if next_5_minute_mark >= 60:
             next_5 = next_5.replace(minute=0) + timedelta(hours=1)
         else:
-            next_5 = next_5.replace(minute=next_minute)
-
+            next_5 = next_5.replace(minute=next_5_minute_mark)
+        
         timers["gear"] = timers["seed"] = get_countdown(next_5)
 
         next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -219,13 +211,13 @@ def get_next_restocks():
         timers = {
             "egg": "Error",
             "gear": "Error",
+
             "seed": "Error",
             "honey": "Error",
             "cosmetic": "Error",
         }
 
     return timers
-
 
 def format_value(val):
     try:
@@ -238,7 +230,6 @@ def format_value(val):
             return f"x{val}"
     except (ValueError, TypeError):
         return f"x{val}"
-
 
 def format_list(arr, show_rarity=False):
     if not arr:
@@ -270,10 +261,8 @@ def format_list(arr, show_rarity=False):
 
     return "\n".join(result) if result else "None."
 
-
 def get_available_categories():
     return ["gear", "seed", "egg", "honey", "cosmetic"]
-
 
 def get_category_emoji(category):
     category_emojis = {
@@ -284,7 +273,6 @@ def get_category_emoji(category):
         "cosmetic": "🎨",
     }
     return category_emojis.get(category, "📦")
-
 
 def get_all_items_from_stock(stock_data):
     all_items = []
@@ -310,10 +298,8 @@ def get_all_items_from_stock(stock_data):
 
     return all_items
 
-
 def normalize_item_name(name):
     return name.lower().strip().replace("_", " ").replace("-", " ")
-
 
 def update_price_history(item_name, category, value):
     key = f"{category}/{item_name}"
@@ -324,7 +310,6 @@ def update_price_history(item_name, category, value):
         price_history[key] = price_history[key][-100:]
 
     save_data("price_history")
-
 
 def get_price_trend(item_name, category):
     key = f"{category}/{item_name}"
@@ -348,7 +333,6 @@ def get_price_trend(item_name, category):
     else:
         return "📊 Stable"
 
-
 def update_user_stats(sender_id, action):
     if sender_id not in user_stats:
         user_stats[sender_id] = {
@@ -368,7 +352,6 @@ def update_user_stats(sender_id, action):
         user_stats[sender_id]["sessions_started"] += 1
 
     save_data("stats")
-
 
 def get_user_preferences(sender_id):
     global user_preferences
@@ -391,7 +374,6 @@ def get_user_preferences(sender_id):
 
     return user_preferences[sender_id]
 
-
 def set_user_preference(sender_id, key, value):
     global user_preferences
 
@@ -410,7 +392,6 @@ def set_user_preference(sender_id, key, value):
         logger.error(f"Error saving preference {key} for {sender_id}: {e}")
         return False
 
-
 def add_price_alert(sender_id, category, item_name, condition, value):
     if sender_id not in user_price_alerts:
         user_price_alerts[sender_id] = []
@@ -426,7 +407,6 @@ def add_price_alert(sender_id, category, item_name, condition, value):
     user_price_alerts[sender_id].append(alert)
     save_data("price_alerts")
     return True
-
 
 def check_price_alerts(sender_id, stock_data):
     if sender_id not in user_price_alerts:
@@ -457,7 +437,6 @@ def check_price_alerts(sender_id, stock_data):
 
     return triggered_alerts
 
-
 def parse_tracked_items(items_string):
     items = []
     if "|" in items_string:
@@ -476,7 +455,6 @@ def parse_tracked_items(items_string):
                 items.append({"category": category, "item_name": item_name})
 
     return items
-
 
 def save_tracked_items(sender_id, items):
     global user_tracked_items
@@ -507,7 +485,6 @@ def save_tracked_items(sender_id, items):
 
     save_tracked_items_to_file()
     return added_count
-
 
 def add_tracked_items(sender_id, items_string):
     items = parse_tracked_items(items_string)
@@ -582,7 +559,6 @@ def add_tracked_items(sender_id, items_string):
 
     return True, "\n".join(message_parts)
 
-
 def remove_tracked_item(sender_id, item_string):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return False, "❌ You don't have any favorite items to remove."
@@ -612,7 +588,6 @@ def remove_tracked_item(sender_id, item_string):
             )
 
     return False, f"❌ '{category}/{item_name}' not found in your favorites list."
-
 
 def list_tracked_items(sender_id):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
@@ -657,7 +632,6 @@ def list_tracked_items(sender_id):
     message += "💡 Set price alert: 'gagstock alert category/item above/below value'"
     return message
 
-
 def clear_tracked_items(sender_id):
     if sender_id not in user_tracked_items or not user_tracked_items[sender_id]:
         return "❌ You don't have any favorite items to clear."
@@ -668,7 +642,6 @@ def clear_tracked_items(sender_id):
     logger.info(f"Cleared {count} tracked items for {sender_id}")
     return f"✅ Cleared {count} favorite item(s) successfully."
 
-
 def cleanup_session(sender_id):
     if sender_id in active_sessions:
         session = active_sessions[sender_id]
@@ -677,7 +650,6 @@ def cleanup_session(sender_id):
             timer.cancel()
         del active_sessions[sender_id]
         logger.info(f"Cleaned up gagstock session for {sender_id}")
-
 
 def get_market_summary(stock_data):
     all_items = get_all_items_from_stock(stock_data)
@@ -708,7 +680,6 @@ def get_market_summary(stock_data):
     )
 
     return summary
-
 
 def fetch_all_data(sender_id, send_message_func):
     if sender_id not in active_sessions:
@@ -918,16 +889,20 @@ def fetch_all_data(sender_id, send_message_func):
                 pass
         cleanup_session(sender_id)
 
-
 def execute(sender_id, args, context):
     send_message_func = context["send_message"]
 
-    # Initialize data first
+    current_time = time.time()
+    if sender_id in user_last_command_time and current_time - user_last_command_time[sender_id] < COMMAND_COOLDOWN:
+        remaining_cooldown = COMMAND_COOLDOWN - (current_time - user_last_command_time[sender_id])
+        send_message_func(sender_id, f"⏳ Please wait {remaining_cooldown:.1f} more seconds before using another command.")
+        return
+    user_last_command_time[sender_id] = current_time
+    
     try:
         load_all_data()
     except Exception as e:
         logger.error(f"Error loading data: {e}")
-        # Continue with empty data structures
         global user_tracked_items, user_price_alerts, user_stats, price_history, user_preferences
         if "user_tracked_items" not in globals():
             user_tracked_items = {}
@@ -1031,19 +1006,15 @@ def execute(sender_id, args, context):
         try:
             logger.info(f"Compact command called by {sender_id}")
 
-            # Ensure preferences are loaded
             load_user_preferences()
 
-            # Get current preferences
             prefs = get_user_preferences(sender_id)
             logger.info(
                 f"Current compact mode for {sender_id}: {prefs.get('compact_mode', False)}"
             )
 
-            # Toggle compact mode
             new_compact_mode = not prefs.get("compact_mode", False)
 
-            # Save the new preference
             if set_user_preference(sender_id, "compact_mode", new_compact_mode):
                 mode = "Compact" if new_compact_mode else "Detailed"
                 send_message_func(
